@@ -1,0 +1,1688 @@
+import { Button, ListView, LineEdit, VerticalBox, HorizontalBox, ScrollView, StandardButton, ComboBox } from "std-widgets.slint";
+
+export struct StashData { index: int, message: string }
+export struct CommitBranchInfo { name: string, is-current: bool, is-remote: bool }
+export struct CommitData { hash: string, full-hash: string, message: string, author: string, date: string, branches: [CommitBranchInfo], graph-column: int, graph-color: color, is-merge: bool, is-head: bool, is-uncommitted: bool, svg-path-0: string, svg-path-1: string, svg-path-2: string, svg-path-3: string, svg-path-4: string, svg-path-5: string, svg-path-6: string, svg-path-7: string, node-path: string }
+export struct FileData { filename: string, status: string, staged: bool }
+export struct LocalBranchData { name: string, is-current: bool }
+export struct RemoteBranchData { name: string }
+export struct DiffLineData { content: string, line-type: string, old-line-num: int, new-line-num: int, hunk-index: int }
+export struct DiffFileData { filename: string, status: string }
+// マージ線用のデータ構造
+export struct MergeLineData { from-row: int, from-col: int, to-row: int, to-col: int, color-idx: int }
+
+// Git Graph用のコミットアイテム - SVGパスベースの描画（色分け対応）
+
+// モーダル用のカスタム入力フィールド
+component ModalLineEdit inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder-text;
+    callback accepted();
+    
+    height: 32px;
+    background: #1e1e1e;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: input-input.has-focus ? #3584e4 : #555;
+    
+    HorizontalBox {
+        padding-left: 8px; padding-right: 8px;
+        input-input := TextInput {
+            text <=> root.text;
+            color: white;
+            font-size: 14px;
+            vertical-alignment: center;
+            single-line: true;
+            accepted => { root.accepted(); }
+        }
+    }
+    // Placeholder (簡易版)
+    if root.text == "" && root.placeholder-text != "": Text {
+        text: root.placeholder-text;
+        color: #666;
+        font-size: 14px;
+        vertical-alignment: center;
+        x: 8px; y: (parent.height - self.height)/2;
+    }
+}
+
+// モーダル用のカスタムボタン
+component ModalButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> primary: false;
+    callback clicked();
+    
+    height: 32px;
+    border-radius: 4px;
+    background: primary ? #3584e4 : #3c3c3c;
+    border-width: 1px;
+    border-color: primary ? #3584e4 : #555;
+    
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    
+    HorizontalBox {
+        padding-left: 12px; padding-right: 12px;
+        Text {
+            text: root.text;
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
+    
+    // Hover effect
+    states [
+        hover when ta.has-hover: {
+            background: primary ? #2a73cc : #4c4c4c;
+        }
+        pressed when ta.pressed: {
+            background: primary ? #1e5cb3 : #2d2d2d;
+        }
+    ]
+}
+
+component CommitHistoryModal inherits Rectangle {
+    in property <[string]> history;
+    callback select(string);
+    callback close();
+    
+    width: 100%; height: 100%;
+    background: #00000080;
+    z: 200;
+    
+    TouchArea { clicked => { root.close(); } }
+    
+    Rectangle {
+        width: 600px;
+        height: 400px;
+        background: #252526;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: #444;
+        
+        TouchArea {} // Prevent click through
+        
+        VerticalBox {
+            padding: 16px;
+            spacing: 12px;
+            
+            Text { text: "Commit Message History"; font-size: 18px; font-weight: 600; color: #c9d1d9; }
+            
+            Rectangle { vertical-stretch: 1; background: #1e1e1e; border-radius: 4px; border-width: 1px; border-color: #333;
+                ScrollView { 
+                    VerticalBox { alignment: start; padding: 4px; spacing: 2px;
+                        for msg[idx] in history: Rectangle {
+                            height: 28px;
+                            background: ta.has-hover ? #2a2d2e : transparent;
+                            border-radius: 4px;
+                            HorizontalBox { padding: 4px;
+                                Text { text: msg; font-size: 14px; color: #c9d1d9; vertical-alignment: center; overflow: elide; }
+                            }
+                            ta := TouchArea {
+                                clicked => { root.select(msg); }
+                            }
+                        }
+                    } 
+                }
+            }
+            
+            HorizontalBox { alignment: end;
+                ModalButton {
+                    text: "Close";
+                    clicked => { root.close(); }
+                }
+            }
+        }
+    }
+}
+component GraphCommitItem inherits Rectangle {
+    in property <string> hash;
+    in property <string> message;
+    in property <string> author;
+    in property <string> date;
+    in property <[CommitBranchInfo]> branches;
+    in property <int> graph-column: 0;
+    in property <color> graph-color: #3584e4;
+    in property <bool> is-merge: false;
+    in property <bool> selected: false;
+    in property <bool> is-head: false;
+    in property <bool> is-uncommitted: false;
+    // 各色ごとのSVGパス（16色分）
+    // 各色ごとの線用SVGパス（8色分）
+    in property <string> svg-path-0: "";
+    in property <string> svg-path-1: "";
+    in property <string> svg-path-2: "";
+    in property <string> svg-path-3: "";
+    in property <string> svg-path-4: "";
+    in property <string> svg-path-5: "";
+    in property <string> svg-path-6: "";
+    in property <string> svg-path-7: "";
+    // ノード用SVGパス（塗りつぶし用）
+    in property <string> node-path: "";
+    
+    callback clicked();
+    callback right-clicked(length, length);  // マウス位置を親に通知
+    callback branch-right-clicked(string, bool, length, length);  // ブランチ名、is-remote、マウスX、マウスY
+    
+    pure function col-spacing() -> length { 16.0px }
+    pure function node-size() -> length { 10px }
+    pure function graph-width() -> length { 320px }
+    
+    height: 28px;
+    background: selected ? #2a2d2e : transparent;
+    
+    commit-ta := TouchArea { 
+        clicked => { root.clicked(); }
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                root.right-clicked(commit-ta.mouse-x, commit-ta.mouse-y);
+            }
+        }
+    }
+    
+    HorizontalBox {
+        padding: 0px;
+        spacing: 0px;
+        
+        Rectangle {
+            width: root.graph-width();
+            height: 28px;
+            clip: true;
+            
+            // 各色ごとの線用Path（8色）- stroke only
+            Path { width: 320px; height: 28px; viewbox-x: 0; viewbox-y: 0; viewbox-width: 320; viewbox-height: 28; commands: svg-path-0; stroke: #3584e4; stroke-width: 2px; fill: transparent; }
+            Path { width: 320px; height: 28px; viewbox-x: 0; viewbox-y: 0; viewbox-width: 320; viewbox-height: 28; commands: svg-path-1; stroke: #2ec27e; stroke-width: 2px; fill: transparent; }
+            Path { width: 320px; height: 28px; viewbox-x: 0; viewbox-y: 0; viewbox-width: 320; viewbox-height: 28; commands: svg-path-2; stroke: #f5c211; stroke-width: 2px; fill: transparent; }
+            Path { width: 320px; height: 28px; viewbox-x: 0; viewbox-y: 0; viewbox-width: 320; viewbox-height: 28; commands: svg-path-3; stroke: #e01b24; stroke-width: 2px; fill: transparent; }
+            Path { width: 320px; height: 28px; viewbox-x: 0; viewbox-y: 0; viewbox-width: 320; viewbox-height: 28; commands: svg-path-4; stroke: #9141ac; stroke-width: 2px; fill: transparent; }
+            Path { width: 320px; height: 28px; viewbox-x: 0; viewbox-y: 0; viewbox-width: 320; viewbox-height: 28; commands: svg-path-5; stroke: #ff7800; stroke-width: 2px; fill: transparent; }
+            Path { width: 320px; height: 28px; viewbox-x: 0; viewbox-y: 0; viewbox-width: 320; viewbox-height: 28; commands: svg-path-6; stroke: #00b8d4; stroke-width: 2px; fill: transparent; }
+            Path { width: 320px; height: 28px; viewbox-x: 0; viewbox-y: 0; viewbox-width: 320; viewbox-height: 28; commands: svg-path-7; stroke: #e91e63; stroke-width: 2px; fill: transparent; }
+            
+            // ノード用Path - fill + stroke
+            Path { width: 320px; height: 28px; viewbox-x: 0; viewbox-y: 0; viewbox-width: 320; viewbox-height: 28; commands: node-path; stroke: is-uncommitted ? #808080 : graph-color; stroke-width: 2px; fill: is-merge ? #1e1e1e : (is-uncommitted ? #1e1e1e : graph-color); }
+        }
+        
+        Text { text: hash; font-size: 14px; color: is-uncommitted ? #808080 : #8b949e; font-family: "monospace"; width: 70px; vertical-alignment: center; }
+        
+        HorizontalLayout {
+            spacing: 4px;
+            alignment: start;
+            for branch in branches: Rectangle {
+                border-radius: 4px;
+                background: branch.is-remote ? #3c3c3c : graph-color;
+                clip: true;
+                
+                // コンテンツサイズに合わせてRectangleのサイズが決まるようにHorizontalLayoutを使用
+                HorizontalLayout {
+                    padding: 3px; padding-right: 6px; spacing: 4px;
+                    Text { 
+                        text: branch.is-remote ? "☁" : "⎇"; 
+                        font-size: 12px; 
+                        color: white; 
+                        vertical-alignment: center; 
+                    }
+                    Text { text: branch.name; font-size: 13px; color: white; vertical-alignment: center; }
+                }
+
+                branch-ta := TouchArea {
+                    pointer-event(event) => {
+                        if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                            root.branch-right-clicked(branch.name, branch.is-remote, branch-ta.mouse-x, branch-ta.mouse-y);
+                        }
+                    }
+                }
+            }
+        }
+        
+        Text { text: message; font-size: 14px; color: is-uncommitted ? #c0c080 : (selected ? #58a6ff : #c9d1d9); overflow: elide; vertical-alignment: center; }
+        Rectangle { }
+        Text { text: author; font-size: 14px; color: is-uncommitted ? #808080 : #8b949e; width: 100px; vertical-alignment: center; overflow: elide; }
+        Text { text: date; font-size: 14px; color: #8b949e; width: 110px; vertical-alignment: center; }
+    }
+}
+
+component FileItem inherits Rectangle {
+    in property <string> filename; in property <string> status; in property <bool> staged: false; in property <bool> selected: false;
+    in property <bool> checked: false;  // 複数選択用チェック状態
+    callback clicked(); callback stage-clicked(); callback right-clicked(length, length);
+    callback ctrl-clicked();  // Ctrl+Click
+    callback shift-clicked(); // Shift+Click
+    callback check-toggled(bool);  // チェックボックス変更
+    height: 28px; background: selected ? #2a2d2e : (checked ? #1a2a3a : transparent);
+    ta := TouchArea { 
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                root.right-clicked(ta.mouse-x, ta.mouse-y);
+            }
+            if (event.button == PointerEventButton.left && event.kind == PointerEventKind.up) {
+                if (event.modifiers.control) {
+                    root.ctrl-clicked();
+                } else if (event.modifiers.shift) {
+                    root.shift-clicked();
+                } else {
+                    root.clicked();
+                }
+            }
+        }
+    }
+    HorizontalBox {
+        padding: 2px; padding-left: 4px; spacing: 4px;
+        // チェックボックス
+        Rectangle { width: 18px; height: 18px; background: checked ? #3584e4 : #333; border-radius: 3px; border-width: 1px; border-color: checked ? #3584e4 : #555;
+            TouchArea { clicked => { root.check-toggled(!root.checked); } }
+            if checked: Text { text: "✓"; font-size: 14px; color: white; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        Rectangle { width: 16px; height: 16px; background: status == "A" ? #2ec27e : status == "M" ? #f5c211 : status == "D" ? #e01b24 : #888; border-radius: 2px;
+            Text { text: status; font-size: 14px; color: white; horizontal-alignment: center; vertical-alignment: center; } }
+        Text { text: filename; font-size: 14px; color: selected ? #58a6ff : (checked ? #58a6ff : #c9d1d9); vertical-alignment: center; overflow: elide; }
+        Rectangle { }
+        Button { text: staged ? "−" : "+"; width: 32px; height: 24px; clicked => { root.stage-clicked(); } }
+    }
+}
+
+
+component LocalBranchItem inherits Rectangle {
+    in property <string> name; in property <bool> is-current: false; in property <bool> selected: false;
+    callback clicked(); callback delete-clicked(); callback double-clicked();
+    callback right-clicked(length, length);  // マウス位置を親に通知
+    height: 28px; background: selected ? #2a2d2e : (is-current ? #1a3a1a : transparent);
+    ta := TouchArea { 
+        clicked => { root.clicked(); }
+        double-clicked => { root.double-clicked(); }
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                root.right-clicked(ta.mouse-x, ta.mouse-y);
+            }
+        }
+    }
+    HorizontalBox {
+        padding: 2px; padding-left: 6px; spacing: 4px;
+        Text { text: is-current ? "●" : "○"; font-size: 14px; color: is-current ? #2ec27e : #555; width: 14px; vertical-alignment: center; }
+        Text { text: name; font-size: 14px; color: selected ? #58a6ff : (is-current ? #2ec27e : #c9d1d9); font-weight: is-current ? 600 : 400; vertical-alignment: center; overflow: elide; }
+        Rectangle { }
+        if !is-current: Button { text: "🗑"; width: 28px; height: 24px; clicked => { root.delete-clicked(); } }
+    }
+}
+
+component StashItem inherits Rectangle {
+    in property <int> index; in property <string> message;
+    callback right-clicked(length, length);
+    
+    height: 28px; background: ta.has-hover ? #2a2d2e : transparent;
+    
+    ta := TouchArea {
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                root.right-clicked(ta.mouse-x, ta.mouse-y);
+            }
+        }
+    }
+    
+    HorizontalBox {
+        padding: 2px; padding-left: 6px; spacing: 4px;
+        Text { text: "📦"; font-size: 14px; color: #8b949e; width: 14px; vertical-alignment: center; }
+        Text { text: index + ": " + message; font-size: 14px; color: #8b949e; vertical-alignment: center; overflow: elide; }
+    }
+}
+
+component RemoteBranchItem inherits Rectangle {
+    in property <string> name; in property <bool> selected: false;
+    callback double-clicked(); callback clicked();
+    height: 28px; background: selected ? #2a2d2e : transparent;
+    TouchArea { clicked => { root.clicked(); } double-clicked => { root.double-clicked(); } }
+    HorizontalBox { padding: 2px; padding-left: 6px; spacing: 4px;
+        Text { text: "↓"; font-size: 14px; color: #666; width: 14px; vertical-alignment: center; }
+        Text { text: name; font-size: 14px; color: selected ? #58a6ff : #8b949e; vertical-alignment: center; overflow: elide; }
+    }
+}
+
+component DiffFileItem inherits Rectangle {
+    in property <string> filename; in property <string> status; in property <bool> selected: false;
+    callback clicked();
+    height: 28px; background: selected ? #2a2d2e : transparent;
+    TouchArea { clicked => { root.clicked(); } }
+    HorizontalBox { padding: 2px; padding-left: 4px; spacing: 4px;
+        Rectangle { width: 16px; height: 16px; background: status == "A" ? #2ec27e : status == "M" ? #f5c211 : status == "D" ? #e01b24 : #888; border-radius: 2px;
+            Text { text: status; font-size: 14px; color: white; horizontal-alignment: center; vertical-alignment: center; } }
+        Text { text: filename; font-size: 14px; color: selected ? #58a6ff : #c9d1d9; vertical-alignment: center; overflow: elide; }
+    }
+}
+
+component DiffLine inherits Rectangle {
+    in property <string> content; in property <string> line-type; in property <int> old-line-num: 0; in property <int> new-line-num: 0;
+    in property <int> hunk-index: -1;
+    in property <bool> show-stage-button: false;  // Stage Hunkボタンを表示するか
+    callback stage-hunk-clicked(int);  // hunk-indexを渡す
+    
+    height: 20px; min-width: 800px;
+    background: line-type == "+" ? #1a3a1a : line-type == "-" ? #3a1a1a : line-type == "@@" ? #1a1a3a : line-type == "diff" ? #2a2a2a : transparent;
+    
+    hunk-ta := TouchArea { }
+    
+    HorizontalLayout { spacing: 0px;
+        Rectangle { width: 45px; background: line-type == "+" ? #1a3a1a : line-type == "-" ? #3a1a1a : #252526;
+            Text { text: old-line-num > 0 ? old-line-num : ""; font-size: 14px; font-family: "monospace"; color: #6e7681; horizontal-alignment: right; vertical-alignment: center; width: parent.width - 8px; } }
+        Rectangle { width: 45px; background: line-type == "+" ? #1a3a1a : line-type == "-" ? #3a1a1a : #252526;
+            Text { text: new-line-num > 0 ? new-line-num : ""; font-size: 14px; font-family: "monospace"; color: #6e7681; horizontal-alignment: right; vertical-alignment: center; width: parent.width - 8px; } }
+        Rectangle { width: 24px; background: line-type == "+" ? #1a3a1a : line-type == "-" ? #3a1a1a : transparent;
+            Text { text: line-type == "+" ? "+" : line-type == "-" ? "-" : ""; font-size: 14px; font-family: "monospace"; color: line-type == "+" ? #7ee787 : line-type == "-" ? #f85149 : #c9d1d9; horizontal-alignment: center; vertical-alignment: center; } }
+        Rectangle { horizontal-stretch: 1;
+            Text { x: 6px; text: content; font-size: 14px; font-family: "monospace"; color: line-type == "+" ? #7ee787 : line-type == "-" ? #f85149 : line-type == "@@" ? #a371f7 : line-type == "diff" ? #58a6ff : #c9d1d9; vertical-alignment: center; }
+            // Hunkヘッダー行にStage Hunkボタンを表示（ホバー時）
+            if line-type == "@@" && show-stage-button && hunk-ta.has-hover: Rectangle {
+                x: parent.width - 100px; y: 0px; width: 90px; height: 20px;
+                background: #2ec27e; border-radius: 3px;
+                stage-btn-ta := TouchArea { 
+                    clicked => { root.stage-hunk-clicked(root.hunk-index); }
+                }
+                Text { text: "Stage Hunk"; font-size: 13px; color: white; horizontal-alignment: center; vertical-alignment: center; }
+            }
+        }
+    }
+}
+
+
+
+
+export component MainWindow inherits Window {
+    title: "RustGitGUI"; min-width: 1100px; min-height: 600px; preferred-width: 1280px; preferred-height: 900px; background: #1e1e1e;
+    
+    in-out property <string> repo-path: ""; in-out property <string> current-branch: "";
+    in-out property <[CommitData]> commits: []; in-out property <[FileData]> unstaged-files: []; in-out property <[FileData]> staged-files: [];
+    in-out property <[LocalBranchData]> local-branches: []; in-out property <[RemoteBranchData]> remote-branches: [];
+    in-out property <[StashData]> stashes: []; // Stash list
+    in-out property <[DiffLineData]> diff-lines: []; in-out property <[DiffFileData]> diff-files: [];
+    in-out property <int> diff-total-lines: 0;
+    in-out property <[MergeLineData]> merge-lines: [];  // マージ線データ
+    in-out property <string> commit-message: ""; in-out property <int> selected-commit: -1; in-out property <string> selected-commit-hash: ""; in-out property <int> selected-branch: -1;
+    in-out property <int> selected-file: -1; in-out property <int> selected-diff-file: -1; in-out property <string> status-message: "";
+    in-out property <string> new-branch-name: ""; in-out property <bool> show-create-branch: false;
+    in-out property <length> local-area-height: 200px; in-out property <length> left-sidebar-width: 180px; in-out property <length> right-panel-width: 340px;
+    in-out property <length> diff-area-height: 300px;
+    in-out property <length> commit-scroll-y: 0px;  // スクロール位置を追跡
+    in-out property <int> selected-remote-branch: -1;
+    in-out property <[string]> recent-repos: [];  // 最近使用したリポジトリ
+    in-out property <int> selected-repo-index: -1;  // 選択中のリポジトリインデックス
+    in-out property <bool> commit-mode: false;  // コミットモード切り替え
+    in-out property <length> commit-panel-width: 600px;  // コミットモード時の右パネル幅
+    
+    // Repository Sidebar Properties
+    in-out property <bool> show-repo-sidebar: false;
+    in-out property <length> repo-sidebar-width: 300px;
+    in-out property <string> repo-name: "";
+    
+    // Stash Context Menu
+    in-out property <bool> show-stash-context-menu: false;
+    in-out property <int> context-menu-stash-index: -1;
+    in-out property <length> context-menu-stash-x: 0px;
+    in-out property <length> context-menu-stash-y: 0px;
+    in-out property <bool> show-create-stash: false;
+    in-out property <string> new-stash-message: "";
+    in-out property <length> remote-area-height: 200px;
+    
+    // Commit History Modal
+    in-out property <bool> show-commit-history-modal: false;
+    
+    // Resize state tracking (to prevent stutter during drag)
+    in-out property <bool> is-resizing: false;
+    
+    // コンテキストメニュー用のグローバル状態
+    in-out property <bool> show-branch-context-menu: false;
+    in-out property <int> context-menu-branch-index: -1;
+    in-out property <string> context-menu-branch-name: "";
+    in-out property <bool> context-menu-branch-is-remote: false;
+    in-out property <length> context-menu-x: 0px;
+    in-out property <length> context-menu-y: 0px;
+    
+    // コミット右クリックメニュー用の状態
+    in-out property <bool> show-commit-context-menu: false;
+    in-out property <int> context-menu-commit-index: -1;
+    in-out property <length> commit-context-menu-x: 0px;
+    in-out property <length> commit-context-menu-y: 0px;
+    in-out property <bool> show-reset-submenu: false;
+    
+    // Unstagedファイル右クリックメニュー用の状態
+    in-out property <bool> show-unstaged-context-menu: false;
+    in-out property <string> context-menu-unstaged-file: "";
+    in-out property <length> unstaged-context-menu-x: 0px;
+    in-out property <length> unstaged-context-menu-y: 0px;
+    
+    // 複数選択用の状態
+    in-out property <[bool]> staged-checked: [];      // Stagedファイルのチェック状態
+    in-out property <[bool]> unstaged-checked: [];    // Unstagedファイルのチェック状態
+    in-out property <int> staged-checked-count: 0;    // Stagedの選択数
+    in-out property <int> unstaged-checked-count: 0;  // Unstagedの選択数
+    in-out property <int> last-clicked-staged: -1;    // Shift選択用: 最後にクリックしたStaged index
+    in-out property <int> last-clicked-unstaged: -1;  // Shift選択用: 最後にクリックしたUnstaged index
+    
+    callback open-repo(string); callback refresh(); callback stage-file(string); callback unstage-file(string);
+    callback browse-repo();  // フォルダ選択ダイアログ
+    callback stage-all(); callback unstage-all(); callback commit(); callback commit-and-push(); callback checkout-branch(string);
+    callback create-branch(string); callback delete-branch(string); callback merge-branch(string);
+    callback select-commit(int, string); callback select-file(string, bool); callback select-diff-file(int);
+    callback pull(); callback push(); callback discard-file(string);
+    callback update-local-state();  // 内部リフレッシュ用（非同期Fetch完了後に呼ばれる）
+    callback stash-save(string, bool); callback stash-apply(int); callback stash-pop(int); callback stash-drop(int);
+    // 複数選択用コールバック
+    callback stage-selected();      // 選択したUnstagedファイルをステージング
+    callback unstage-selected();    // 選択したStagedファイルをアンステージ
+    callback discard-selected();    // 選択したUnstagedファイルの変更を破棄
+    callback toggle-staged-check(int, bool);    // Stagedファイルのチェック切り替え
+    callback toggle-unstaged-check(int, bool);  // Unstagedファイルのチェック切り替え
+    callback staged-range-select(int);    // Staged: Shift+Click範囲選択
+    callback unstaged-range-select(int);  // Unstaged: Shift+Click範囲選択
+    callback checkout-remote-branch(string);
+    callback copy-branch-name(string); callback create-pull-request(string);
+    // コミット右クリックメニュー用コールバック
+    callback copy-commit-hash(string);  // フルハッシュをコピー
+    callback copy-commit-message(string);  // コミットメッセージをコピー
+    callback reset-to-commit(int, string);  // index, mode (soft/mixed/hard)
+    callback revert-commit(int);  // index
+    callback open-commit-on-github(string);  // フルハッシュ
+    // Stage Hunk用コールバック
+    callback stage-hunk(int);  // hunk-indexを渡してステージング
+    
+    // 現在表示中のファイル情報（Stage Hunk用）
+    in-out property <string> current-diff-filename: "";
+    in-out property <bool> current-diff-is-staged: false;
+    
+    // コミットメッセージ履歴
+    in-out property <[string]> commit-message-history: [];  // 最近のコミットメッセージ履歴
+    in-out property <int> commit-history-index: -1;  // 現在選択中の履歴インデックス（-1は未選択）
+    callback select-commit-message-history(int);  // 履歴を選択したときのコールバック
+    callback navigate-commit-history(int);  // キーボードナビゲーション（1=上、-1=下）
+    
+    // Diff計算の遅延実行用
+    in-out property <int> pending-diff-index: -1;
+    in-out property <string> pending-diff-hash: "";
+    
+    // Diff計算を遅延実行するTimer（選択状態の描画を先に完了させる）
+    Timer {
+        interval: 50ms;
+        running: pending-diff-hash != "";
+        triggered => {
+            select-commit(pending-diff-index, pending-diff-hash);
+            pending-diff-index = -1;
+            pending-diff-hash = "";
+        }
+    }
+    
+    // メインコンテンツ
+    Rectangle {
+        VerticalBox {
+        Rectangle { height: 42px; background: #252526;
+            HorizontalBox { padding: 6px; spacing: 6px;
+                Button { 
+                    text: show-repo-sidebar ? "📂" : "📁"; 
+                    width: 40px;
+                    clicked => { show-repo-sidebar = !show-repo-sidebar; }
+                }
+                Text {
+                    text: repo-name != "" ? repo-name : "Select Repository";
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: #c9d1d9;
+                    vertical-alignment: center;
+                }
+                Rectangle { width: 8px; }
+                Button { text: "⬇️ Pull"; clicked => { pull(); } }
+                Button { text: "⬆️ Push"; clicked => { push(); } }
+                Button { text: "🔄 Refresh & Fetch"; clicked => { refresh(); } }
+                Rectangle { width: 8px; }
+            }
+        }
+        
+        if status-message != "": Rectangle { height: 20px; background: #0d419d;
+            Text { text: status-message; color: white; font-size: 12px; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        
+        Rectangle { vertical-stretch: 1;
+            Rectangle { x: 0px; y: 0px; width: parent.width; height: parent.height; background: #252526;
+                Rectangle { x: 0px; y: 0px; width: left-sidebar-width; height: parent.height; background: #252526;
+                // モード切り替えボタン（Local/Remoteの上）
+                Rectangle { x: 0px; y: 0px; width: parent.width; height: 40px;
+                    HorizontalBox { padding: 4px; spacing: 4px;
+                        if !commit-mode: Button { 
+                            text: "📝 Commit"; 
+                            horizontal-stretch: 1;
+                            clicked => { 
+                                commit-mode = true; 
+                                diff-lines = [];
+                                diff-total-lines = 0;
+                                current-diff-filename = "";
+                                selected-diff-file = -1;
+                                selected-file = -1;
+                                selected-commit-hash = "";
+                            }
+                        }
+                        if commit-mode: Button { 
+                            text: "← Back"; 
+                            horizontal-stretch: 1;
+                            clicked => { commit-mode = false; }
+                        }
+                    }
+                }
+                Rectangle { x: 0px; y: 40px; width: parent.width; height: local-area-height - 40px;
+                    VerticalBox { padding: 4px; spacing: 4px;
+                        HorizontalBox { height: 36px;
+                            Rectangle { width: 4px; height: 16px; background: #2ec27e; border-radius: 2px; }
+                            Text { text: "Local (" + local-branches.length + ")"; font-size: 14px; font-weight: 600; color: #c9d1d9; vertical-alignment: center; }
+                            Rectangle { }
+                            Button { text: "+"; width: 32px; clicked => { show-create-branch = !show-create-branch; } }
+                        }
+                        if show-create-branch: Rectangle { height: 0px; } // Removed inline creation
+
+                        local-branch-list := Rectangle { vertical-stretch: 1; background: #1e1e1e; border-radius: 4px;
+                            ScrollView { VerticalBox { alignment: start;
+                                for branch[idx] in local-branches: LocalBranchItem { name: branch.name; is-current: branch.is-current; selected: idx == selected-branch;
+                                    clicked => { selected-branch = idx; show-branch-context-menu = false; }
+                                    double-clicked => { if !branch.is-current { checkout-branch(branch.name); } }
+                                    delete-clicked => { delete-branch(branch.name); }
+                                    right-clicked(mx, my) => {
+                                        context-menu-branch-index = idx;
+                                        context-menu-branch-name = branch.name;
+                                        context-menu-x = local-branch-list.absolute-position.x + mx;
+                                        context-menu-y = local-branch-list.absolute-position.y + idx * 28px + my;
+                                        show-branch-context-menu = true;
+                                    }
+                                }
+                            } }
+                        }
+                    }
+                }
+                Rectangle { x: 0px; y: local-area-height; width: parent.width; height: 6px; background: #3c3c3c;
+                    TouchArea { 
+                        mouse-cursor: row-resize;
+                        pointer-event(event) => {
+                            if (event.button == PointerEventButton.left) {
+                                if (event.kind == PointerEventKind.down) { is-resizing = true; }
+                                if (event.kind == PointerEventKind.up) { is-resizing = false; }
+                            }
+                        }
+                        moved => { local-area-height = clamp(local-area-height + self.mouse-y - 3px, 80px, 500px); } 
+                    }
+                }
+                Rectangle { x: 0px; y: local-area-height + 6px; width: parent.width; height: remote-area-height;
+                    VerticalBox { padding: 4px; spacing: 4px;
+                        HorizontalBox { height: 28px;
+                            Rectangle { width: 4px; height: 16px; background: #666; border-radius: 2px; }
+                            Text { text: "Remote (" + remote-branches.length + ")"; font-size: 14px; font-weight: 600; color: #8b949e; vertical-alignment: center; }
+                        }
+                        Rectangle { vertical-stretch: 1; background: #1e1e1e; border-radius: 4px;
+                            ScrollView { VerticalBox { alignment: start;
+                                for branch[idx] in remote-branches: RemoteBranchItem { name: branch.name; selected: idx == selected-remote-branch;
+                                    clicked => { selected-remote-branch = idx; }
+                                    double-clicked => { checkout-remote-branch(branch.name); }
+                                }
+                            } }
+                        }
+                    }
+                }
+                Rectangle { x: 0px; y: local-area-height + 6px + remote-area-height; width: parent.width; height: 6px; background: #3c3c3c;
+                    TouchArea { 
+                        mouse-cursor: row-resize;
+                        pointer-event(event) => {
+                            if (event.button == PointerEventButton.left) {
+                                if (event.kind == PointerEventKind.down) { is-resizing = true; }
+                                if (event.kind == PointerEventKind.up) { is-resizing = false; }
+                            }
+                        }
+                        moved => { remote-area-height = clamp(remote-area-height + self.mouse-y - 3px, 60px, 300px); } 
+                    }
+                }
+                Rectangle { 
+                    x: 0px; 
+                    y: local-area-height + 6px + remote-area-height + 6px; 
+                    width: parent.width; 
+                    height: parent.height - local-area-height - 6px - remote-area-height - 6px;
+                    VerticalBox { padding: 4px; spacing: 4px;
+                        HorizontalBox { height: 36px;
+                            Rectangle { width: 4px; height: 16px; background: #9141ac; border-radius: 2px; }
+                            Text { text: "Stashes (" + stashes.length + ")"; font-size: 14px; font-weight: 600; color: #c9d1d9; vertical-alignment: center; }
+                            Rectangle { }
+                            Button { text: "+"; width: 32px; clicked => { show-create-stash = !show-create-stash; } }
+                        }
+                        
+                        stash-list := Rectangle { vertical-stretch: 1; background: #1e1e1e; border-radius: 4px;
+                            ScrollView { VerticalBox { alignment: start;
+                                for stash[idx] in stashes: StashItem { 
+                                    index: stash.index; message: stash.message;
+                                    right-clicked(mx, my) => {
+                                        context-menu-stash-index = stash.index;
+                                        context-menu-stash-x = stash-list.absolute-position.x + mx;
+                                        context-menu-stash-y = stash-list.absolute-position.y + idx * 24px + my;
+                                        show-stash-context-menu = true;
+                                    }
+                                }
+                            } }
+                        }
+                    }
+                }
+            }
+            Rectangle { x: left-sidebar-width; y: 0px; width: 4px; height: parent.height; background: #3c3c3c;
+                TouchArea { 
+                    mouse-cursor: col-resize;
+                    pointer-event(event) => {
+                        if (event.button == PointerEventButton.left) {
+                            if (event.kind == PointerEventKind.down) { is-resizing = true; }
+                            if (event.kind == PointerEventKind.up) { is-resizing = false; }
+                        }
+                    }
+                    moved => { left-sidebar-width = clamp(left-sidebar-width + self.mouse-x - 2px, 120px, 400px); } 
+                }
+            }
+
+            // 通常モード: Main Content (Graph + Diff)
+            if !commit-mode: Rectangle { 
+                x: left-sidebar-width + 4px; 
+                y: 0px; 
+                width: parent.width - left-sidebar-width - 4px; 
+                height: parent.height; 
+                background: #1e1e1e;
+
+                VerticalBox {
+                    padding: 0px; spacing: 0px;
+                    
+                    // Graph Area
+                    Rectangle {
+                        vertical-stretch: 1;
+                        VerticalBox { padding: 4px; spacing: 2px;
+                            Rectangle { height: 22px; background: #252526; border-radius: 2px;
+                                HorizontalBox { padding: 3px;
+                                    Text { text: "Graph"; width: 320px; font-size: 12px; color: #8b949e; vertical-alignment: center; }
+                                    Text { text: "Commit"; width: 70px; font-size: 12px; color: #8b949e; vertical-alignment: center; }
+                                    Text { text: "Description"; width: 130px; font-size: 12px; color: #8b949e; vertical-alignment: center; }
+                                    Text { text: ""; font-size: 12px; color: #8b949e; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Text { text: "Author"; width: 100px; font-size: 12px; color: #8b949e; vertical-alignment: center; }
+                                    Text { text: "Date"; width: 110px; font-size: 12px; color: #8b949e; vertical-alignment: center; }
+                                }
+                            }
+                            // コミットリストとマージ線オーバーレイを重ねる
+                            Rectangle { vertical-stretch: 1; clip: true;
+                                // リサイズ中はプレースホルダーを表示（パフォーマンス向上のため）
+                                if is-resizing: Rectangle {
+                                    background: #1e1e1e;
+                                    Text { 
+                                        text: "Resizing..."; 
+                                        font-size: 14px; 
+                                        color: #666; 
+                                        horizontal-alignment: center; 
+                                        vertical-alignment: center; 
+                                    }
+                                }
+                                // マージ線オーバーレイ（コミットリストの下に描画）
+                                if !is-resizing: Rectangle {
+                                    x: 0px; y: 0px; width: 320px; height: parent.height; clip: true;
+                                    for ml in merge-lines: Path {
+                                        y: commit-scroll-y;
+                                        width: 320px; height: commits.length * 28px;
+                                        viewbox-x: 0; viewbox-y: 0; viewbox-width: 320; viewbox-height: commits.length * 28;
+                                        commands: 
+                                        "M " + (ml.from-col * 16 + 21) + " " + (ml.from-row * 28 + 4) + 
+                                        " C " + 
+                                         (ml.from-col * 16 + 21) + " " + ((ml.from-row + ml.to-row) / 2 * 28 + 4) + " " + 
+                                         (ml.to-col * 16 + 21) + " " + ((ml.from-row + ml.to-row) / 2 * 28 + 4) + " " + 
+                                         (ml.to-col * 16 + 21) + " " + (ml.to-row * 28 + 4);
+                                        stroke: ml.color-idx == 0 ? #3584e4 : ml.color-idx == 1 ? #2ec27e : ml.color-idx == 2 ? #f5c211 : ml.color-idx == 3 ? #e01b24 : ml.color-idx == 4 ? #9141ac : ml.color-idx == 5 ? #ff7800 : ml.color-idx == 6 ? #00b8d4 : #e91e63;
+                                        stroke-width: 2px; fill: transparent;
+                                    }
+                                }
+                                // コミットリスト
+                                if !is-resizing: commit-flickable := Flickable {
+                                    viewport-height: commits.length * 28px;
+                                    viewport-y <=> commit-scroll-y;
+                                    VerticalBox { alignment: start; spacing: 0px;
+                                        for commit[idx] in commits: GraphCommitItem {
+                                            hash: commit.hash; message: commit.message; author: commit.author; date: commit.date;
+                                            branches: commit.branches; graph-column: commit.graph-column; graph-color: commit.graph-color;
+                                            is-merge: commit.is-merge; is-head: commit.is-head; is-uncommitted: commit.is-uncommitted;
+                                            svg-path-0: commit.svg-path-0; svg-path-1: commit.svg-path-1; svg-path-2: commit.svg-path-2; svg-path-3: commit.svg-path-3;
+                                            svg-path-4: commit.svg-path-4; svg-path-5: commit.svg-path-5; svg-path-6: commit.svg-path-6; svg-path-7: commit.svg-path-7;
+                                            node-path: commit.node-path;
+                                            selected: idx == selected-commit;
+                                            clicked => { 
+                                                selected-commit = idx; 
+                                                selected-commit-hash = commit.full-hash; 
+                                                pending-diff-index = idx; pending-diff-hash = commit.full-hash;
+                                            }
+                                            right-clicked(mx, my) => {
+                                                if !commit.is-uncommitted {
+                                                    context-menu-commit-index = idx;
+                                                    commit-context-menu-x = left-sidebar-width + 4px + mx;
+                                                    commit-context-menu-y = 42px + 22px + idx * 28px + my + commit-scroll-y;
+                                                    show-commit-context-menu = true; show-reset-submenu = false;
+                                                }
+                                            }
+                                            branch-right-clicked(name, is-remote, mx, my) => {
+                                                context-menu-branch-name = name; context-menu-branch-index = -1;
+                                                context-menu-branch-is-remote = is-remote;
+                                                context-menu-x = left-sidebar-width + 4px + 320px + 70px + mx;
+                                                context-menu-y = 42px + 22px + idx * 28px + my + commit-scroll-y;
+                                                show-branch-context-menu = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Resizer
+                    Rectangle { 
+                        height: 6px; background: #3c3c3c;
+                        TouchArea { 
+                            mouse-cursor: row-resize;
+                            pointer-event(event) => {
+                                if (event.button == PointerEventButton.left) {
+                                    if (event.kind == PointerEventKind.down) { is-resizing = true; }
+                                    if (event.kind == PointerEventKind.up) { is-resizing = false; }
+                                }
+                            }
+                            moved => { diff-area-height = clamp(diff-area-height - self.mouse-y, 100px, parent.height - 100px); } 
+                        }
+                    }
+
+                    // Diff Area (Changed Files + Diff content)
+                    Rectangle { 
+                        height: diff-area-height; background: #252526;
+                        
+                        // Use HorizontalBox to split Changed Files (left) and Diff (right) 
+                        // OR Keep strict Vertical structure? The user complaint was "Graph見切れてる".
+                        // If we move diff to bottom, we have full width.
+                        // We can display "Changed Files" on the left side of the bottom panel, and "Diff" on the remaining right side.
+                        
+                        HorizontalBox { padding: 4px; spacing: 4px;
+                            // Changed Files List (Left)
+                            Rectangle {
+                                width: 300px; // Fixed width for file list?
+                                VerticalBox { padding: 0px; spacing: 4px;
+                                    Text { text: "Changed Files (" + diff-files.length + ")"; font-size: 14px; font-weight: 600; color: #c9d1d9; height: 32px; vertical-alignment: center; }
+                                    Rectangle { vertical-stretch: 1; background: #1e1e1e; border-radius: 4px;
+                                        ScrollView { VerticalBox { alignment: start;
+                                            for file[idx] in diff-files: DiffFileItem { filename: file.filename; status: file.status; selected: idx == selected-diff-file;
+                                                clicked => { selected-diff-file = idx; select-diff-file(idx); }
+                                            }
+                                        } }
+                                    }
+                                }
+                            }
+                            
+                            // Diff Content (Right)
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                VerticalBox { padding: 0px; spacing: 4px;
+                                HorizontalBox { height: 32px;
+                                        Text { text: "Diff"; font-size: 14px; font-weight: 600; color: #c9d1d9; vertical-alignment: center; }
+                                        Rectangle { }
+                                        Text { text: diff-total-lines + " lines"; font-size: 14px; color: #8b949e; vertical-alignment: center; }
+                                    }
+                                    Rectangle { vertical-stretch: 1; background: #1e1e1e; border-radius: 4px; clip: true;
+                                        Flickable { viewport-width: 900px; viewport-height: diff-lines.length * 20px + 8px;
+                                            VerticalBox { alignment: start; padding: 2px; spacing: 0px;
+                                                for line in diff-lines: DiffLine { content: line.content; line-type: line.line-type; old-line-num: line.old-line-num; new-line-num: line.new-line-num; }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // コミットモード: 左側に Staged/Unstaged/Commit
+            if commit-mode: Rectangle { x: left-sidebar-width + 4px; y: 0px; width: commit-panel-width; height: parent.height; background: #252526;
+                VerticalBox { padding: 4px; spacing: 4px;
+                    // Staged ヘッダー + ボタン
+                    HorizontalBox { height: 36px; padding-top: 4px; padding-bottom: 4px;
+                        Text { text: "Staged (" + staged-files.length + ")"; font-size: 14px; font-weight: 600; color: #2ec27e; vertical-alignment: center; }
+                        if staged-checked-count > 0: Text { text: " • " + staged-checked-count + " selected"; font-size: 13px; color: #8b949e; vertical-alignment: center; }
+                        Rectangle { }
+                        Button { text: "Stash"; clicked => { show-create-stash = true; } }
+                        Button { text: "Unstage Selected"; enabled: staged-checked-count > 0; clicked => { unstage-selected(); } }
+                        Button { text: "Unstage All"; enabled: staged-files.length > 0; clicked => { unstage-all(); } }
+                    }
+                    staged-list := Rectangle { vertical-stretch: 1; background: #1e1e1e; border-radius: 4px;
+                        ScrollView { VerticalBox { alignment: start;
+                            for file[idx] in staged-files: FileItem { 
+                                filename: file.filename; status: file.status; staged: true; 
+                                selected: selected-file == idx;
+                                checked: idx < staged-checked.length ? staged-checked[idx] : false;
+                                clicked => { 
+                                    selected-file = idx; 
+                                    select-file(file.filename, true); 
+                                    last-clicked-staged = idx;
+                                    toggle-staged-check(idx, true);
+                                }
+                                ctrl-clicked => { toggle-staged-check(idx, !(idx < staged-checked.length ? staged-checked[idx] : false)); last-clicked-staged = idx; }
+                                shift-clicked => { staged-range-select(idx); }
+                                check-toggled(checked) => { toggle-staged-check(idx, checked); last-clicked-staged = idx; }
+                                stage-clicked => { unstage-file(file.filename); }
+                                right-clicked(mx, my) => { }
+                            }
+                        } }
+                    }
+                    // Unstaged ヘッダー + ボタン
+                    HorizontalBox { height: 36px; padding-top: 4px; padding-bottom: 4px;
+                        Text { text: "Unstaged (" + unstaged-files.length + ")"; font-size: 14px; font-weight: 600; color: #e01b24; vertical-alignment: center; }
+                        if unstaged-checked-count > 0: Text { text: " • " + unstaged-checked-count + " selected"; font-size: 13px; color: #8b949e; vertical-alignment: center; }
+                        Rectangle { }
+                        Button { text: "🗑"; enabled: unstaged-checked-count > 0; clicked => { discard-selected(); } }
+                        Button { text: "Stage Selected"; enabled: unstaged-checked-count > 0; clicked => { stage-selected(); } }
+                        Button { text: "Stage All"; enabled: unstaged-files.length > 0; clicked => { stage-all(); } }
+                    }
+                    unstaged-list := Rectangle { vertical-stretch: 1; background: #1e1e1e; border-radius: 4px;
+                        ScrollView { VerticalBox { alignment: start;
+                            for file[idx] in unstaged-files: FileItem { 
+                                filename: file.filename; status: file.status; staged: false;
+                                selected: selected-file == idx + 1000;
+                                checked: idx < unstaged-checked.length ? unstaged-checked[idx] : false;
+                                clicked => { 
+                                    selected-file = idx + 1000; 
+                                    select-file(file.filename, false); 
+                                    last-clicked-unstaged = idx;
+                                    toggle-unstaged-check(idx, true);
+                                }
+                                ctrl-clicked => { toggle-unstaged-check(idx, !(idx < unstaged-checked.length ? unstaged-checked[idx] : false)); last-clicked-unstaged = idx; }
+                                shift-clicked => { unstaged-range-select(idx); }
+                                check-toggled(checked) => { toggle-unstaged-check(idx, checked); last-clicked-unstaged = idx; }
+                                stage-clicked => { stage-file(file.filename); }
+                                right-clicked(mx, my) => { }
+                            }
+                        } }
+                    }
+                    // Commit Message ヘッダー
+                    // Commit Message ヘッダー
+                    HorizontalLayout {
+                        height: 32px;
+                        padding-left: 4px; padding-right: 4px;
+                        Text { text: "Commit Message"; font-size: 14px; font-weight: 600; color: #c9d1d9; vertical-alignment: center; horizontal-stretch: 1; }
+                        Button { 
+                            text: "🕒 History"; 
+                            enabled: commit-message-history.length > 0;
+                            clicked => { show-commit-history-modal = true; }
+                        }
+                    }
+                    // 履歴ドロップダウン削除済み
+                    Rectangle { 
+                        height: 80px; 
+                        background: #1e1e1e; 
+                        border-radius: 4px;
+                        border-width: 1px;
+                        border-color: commit-input.has-focus ? #3584e4 : #3c3c3c;
+                        clip: true;
+                        
+                        Flickable {
+                            x: 4px; y: 4px;
+                            width: parent.width - 8px;
+                            height: parent.height - 8px;
+                            viewport-width: self.width;
+                            viewport-height: max(self.height, commit-input.preferred-height + 8px);
+                            
+                            commit-input := TextInput {
+                                x: 4px; y: 4px;
+                                width: parent.width - 8px;
+                                text <=> commit-message;
+                                font-size: 14px;
+                                color: #c9d1d9;
+                                selection-background-color: #264f78;
+                                selection-foreground-color: #ffffff;
+                                wrap: word-wrap;
+                                single-line: false;
+                                
+                                // ↑↓キーで履歴をナビゲート（空のときのみ）
+                                key-pressed(event) => {
+                                    if (commit-message == "" && event.text == Key.UpArrow) {
+                                        navigate-commit-history(1);
+                                        accept
+                                    } else if (event.text == Key.UpArrow && commit-history-index >= 0) {
+                                        navigate-commit-history(1);
+                                        accept
+                                    } else if (event.text == Key.DownArrow && commit-history-index >= 0) {
+                                        navigate-commit-history(-1);
+                                        accept
+                                    } else {
+                                        reject
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // プレースホルダー
+                        if commit-message == "": Text {
+                            x: 8px; y: 8px;
+                            text: "Commit message... (↑ for history)\n\nLine 2 for details (optional)";
+                            font-size: 14px;
+                            color: #6e6e6e;
+                        }
+                    }
+                    HorizontalBox { 
+                        height: 40px; 
+                        spacing: 8px;
+                        padding-top: 4px;
+                        padding-bottom: 4px;
+                        Button { 
+                            text: "  Commit  "; 
+                            enabled: commit-message != "" && staged-files.length > 0; 
+                            clicked => { commit(); commit-mode = false; } 
+                        }
+                        Button { 
+                            text: "  Commit & Push ⬆  "; 
+                            enabled: commit-message != "" && staged-files.length > 0; 
+                            clicked => { commit-and-push(); commit-mode = false; } 
+                        }
+                        Rectangle { }
+                    }
+                }
+            }
+            // コミットモード: 左パネルのリサイズハンドル
+            if commit-mode: Rectangle { x: left-sidebar-width + commit-panel-width + 4px; y: 0px; width: 4px; height: parent.height; background: #3c3c3c;
+                TouchArea { 
+                    mouse-cursor: col-resize;
+                    pointer-event(event) => {
+                        if (event.button == PointerEventButton.left) {
+                            if (event.kind == PointerEventKind.down) { is-resizing = true; }
+                            if (event.kind == PointerEventKind.up) { is-resizing = false; }
+                        }
+                    }
+                    moved => { commit-panel-width = clamp(commit-panel-width + self.mouse-x - 2px, 250px, 450px); } 
+                }
+            }
+            // コミットモード: 右側全体に Diff を大きく表示
+            if commit-mode: Rectangle { x: left-sidebar-width + commit-panel-width + 8px; y: 0px; width: parent.width - left-sidebar-width - commit-panel-width - 12px; height: parent.height; background: #1e1e1e;
+                VerticalBox { padding: 4px; spacing: 4px;
+                    HorizontalBox { height: 28px;
+                        Text { text: "Diff"; font-size: 14px; font-weight: 600; color: #c9d1d9; vertical-alignment: center; }
+                        Rectangle { }
+                        Text { text: diff-total-lines + " lines"; font-size: 14px; color: #8b949e; vertical-alignment: center; }
+                    }
+                    Rectangle { vertical-stretch: 1; background: #1e1e1e; border-radius: 4px; clip: true;
+                        Flickable { viewport-width: self.width > 900px ? self.width : 900px; viewport-height: diff-lines.length * 20px + 8px;
+                            VerticalBox { alignment: start; padding: 2px; spacing: 0px;
+                                for line in diff-lines: DiffLine { 
+                                    content: line.content; 
+                                    line-type: line.line-type; 
+                                    old-line-num: line.old-line-num; 
+                                    new-line-num: line.new-line-num;
+                                    hunk-index: line.hunk-index;
+                                    show-stage-button: !current-diff-is-staged && current-diff-filename != "";
+                                    stage-hunk-clicked(idx) => { stage-hunk(idx); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        }
+        }
+        
+        // グローバルコンテキストメニューオーバーレイ
+        if show-branch-context-menu: Rectangle {
+            width: 100%; height: 100%;
+            background: transparent;
+            
+            // メニュー外クリックで閉じる
+            TouchArea {
+                clicked => { show-branch-context-menu = false; }
+                pointer-event(event) => {
+                    if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                        show-branch-context-menu = false;
+                    }
+                }
+            }
+            
+            // コンテキストメニュー本体
+            Rectangle {
+                x: min(context-menu-x, parent.width - 190px);
+                y: min(context-menu-y, parent.height - (context-menu-branch-index >= 0 && context-menu-branch-index < local-branches.length && !local-branches[context-menu-branch-index].is-current ? 138px : 74px));
+                width: 180px;
+                // サイドバーからのクリック: Checkout, Copy, PR, Merge (index >= 0)
+                // Graphからのクリック: Checkout, Copy のみ (index == -1)
+                height: context-menu-branch-index >= 0 && context-menu-branch-index < local-branches.length && !local-branches[context-menu-branch-index].is-current ? 130px : (context-menu-branch-index >= 0 ? 98px : 66px);
+                background: #2d2d2d; border-radius: 4px;
+                drop-shadow-blur: 8px; drop-shadow-color: #00000080;
+                
+                // メニュー内クリックはオーバーレイに伝播させない
+                TouchArea { }
+                
+                VerticalBox {
+                    padding: 4px; spacing: 2px;
+                    
+                    // Checkout Branch
+                    Rectangle {
+                        height: 28px; border-radius: 3px;
+                        background: checkout-ta.has-hover ? #3d3d3d : transparent;
+                        checkout-ta := TouchArea {
+                            clicked => {
+                                if context-menu-branch-name != "" {
+                                    if context-menu-branch-is-remote {
+                                        checkout-remote-branch(context-menu-branch-name);
+                                    } else {
+                                        checkout-branch(context-menu-branch-name);
+                                    }
+                                }
+                                show-branch-context-menu = false;
+                            }
+                        }
+                        HorizontalBox {
+                            padding-left: 8px; spacing: 8px;
+                            Text { text: "➡"; font-size: 14px; vertical-alignment: center; width: 16px; color: #c9d1d9; }
+                            Text { text: "Checkout Branch"; font-size: 14px; color: #c9d1d9; vertical-alignment: center; }
+                        }
+                    }
+                    
+                    // Copy Branch Name
+                    Rectangle {
+                        height: 28px; border-radius: 3px;
+                        background: copy-ta.has-hover ? #3d3d3d : transparent;
+                        copy-ta := TouchArea {
+                            clicked => {
+                                if context-menu-branch-name != "" {
+                                    copy-branch-name(context-menu-branch-name);
+                                }
+                                show-branch-context-menu = false;
+                            }
+                        }
+                        HorizontalBox {
+                            padding-left: 8px; spacing: 8px;
+                            Text { text: "📋"; font-size: 14px; vertical-alignment: center; width: 16px; }
+                            Text { text: "Copy Branch Name"; font-size: 14px; color: #c9d1d9; vertical-alignment: center; }
+                        }
+                    }
+                    // Create Pull Request (サイドバーからのクリック時のみ表示)
+                    if context-menu-branch-index >= 0: Rectangle {
+                        height: 28px; border-radius: 3px;
+                        background: pr-ta.has-hover ? #3d3d3d : transparent;
+                        pr-ta := TouchArea {
+                            clicked => {
+                                if context-menu-branch-name != "" {
+                                    create-pull-request(context-menu-branch-name);
+                                }
+                                show-branch-context-menu = false;
+                            }
+                        }
+                        HorizontalBox {
+                            padding-left: 8px; spacing: 8px;
+                            Text { text: "🔗"; font-size: 14px; vertical-alignment: center; width: 16px; }
+                            Text { text: "Create Pull Request"; font-size: 14px; color: #c9d1d9; vertical-alignment: center; }
+                        }
+                    }
+                    // Merge into Current (only for non-current branches)
+                    if context-menu-branch-index >= 0 && context-menu-branch-index < local-branches.length && !local-branches[context-menu-branch-index].is-current: Rectangle {
+                        height: 28px; border-radius: 3px;
+                        background: merge-ta.has-hover ? #3d3d3d : transparent;
+                        merge-ta := TouchArea {
+                            clicked => {
+                                merge-branch(local-branches[context-menu-branch-index].name);
+                                show-branch-context-menu = false;
+                            }
+                        }
+                        HorizontalBox {
+                            padding-left: 8px; spacing: 8px;
+                            Text { text: "🔀"; font-size: 14px; vertical-alignment: center; width: 16px; }
+                            Text { text: "Merge into Current"; font-size: 14px; color: #c9d1d9; vertical-alignment: center; }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // コミット右クリックメニューオーバーレイ
+        if show-commit-context-menu: Rectangle {
+            width: 100%; height: 100%;
+            background: transparent;
+            
+            // メニュー外クリックで閉じる
+            TouchArea {
+                clicked => { show-commit-context-menu = false; show-reset-submenu = false; }
+                pointer-event(event) => {
+                    if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                        show-commit-context-menu = false;
+                        show-reset-submenu = false;
+                    }
+                }
+            }
+            
+            // コンテキストメニュー本体
+            Rectangle {
+                x: min(commit-context-menu-x, parent.width - 220px);
+                y: min(commit-context-menu-y, parent.height - 170px);
+                width: 210px;
+                height: 160px;
+                background: #2d2d2d; border-radius: 4px;
+                drop-shadow-blur: 8px; drop-shadow-color: #00000080;
+                
+                TouchArea { }
+                
+                VerticalBox {
+                    padding: 4px; spacing: 2px;
+                    
+                    // Copy Commit Hash
+                    Rectangle {
+                        height: 28px; border-radius: 3px;
+                        background: copy-hash-ta.has-hover ? #3d3d3d : transparent;
+                        copy-hash-ta := TouchArea {
+                            clicked => {
+                                if context-menu-commit-index >= 0 && context-menu-commit-index < commits.length {
+                                    copy-commit-hash(commits[context-menu-commit-index].full-hash);
+                                }
+                                show-commit-context-menu = false;
+                            }
+                        }
+                        HorizontalBox {
+                            padding-left: 8px; spacing: 8px;
+                            Text { text: "📋"; font-size: 14px; vertical-alignment: center; width: 16px; }
+                            Text { text: "Copy Commit Hash"; font-size: 14px; color: #c9d1d9; vertical-alignment: center; }
+                        }
+                    }
+                    
+                    // Copy Commit Message
+                    Rectangle {
+                        height: 28px; border-radius: 3px;
+                        background: copy-msg-ta.has-hover ? #3d3d3d : transparent;
+                        copy-msg-ta := TouchArea {
+                            clicked => {
+                                if context-menu-commit-index >= 0 && context-menu-commit-index < commits.length {
+                                    copy-commit-message(commits[context-menu-commit-index].message);
+                                }
+                                show-commit-context-menu = false;
+                            }
+                        }
+                        HorizontalBox {
+                            padding-left: 8px; spacing: 8px;
+                            Text { text: "📝"; font-size: 14px; vertical-alignment: center; width: 16px; }
+                            Text { text: "Copy Commit Message"; font-size: 14px; color: #c9d1d9; vertical-alignment: center; }
+                        }
+                    }
+                    
+                    // Open on GitHub
+                    Rectangle {
+                        height: 28px; border-radius: 3px;
+                        background: github-ta.has-hover ? #3d3d3d : transparent;
+                        github-ta := TouchArea {
+                            clicked => {
+                                if context-menu-commit-index >= 0 && context-menu-commit-index < commits.length {
+                                    open-commit-on-github(commits[context-menu-commit-index].full-hash);
+                                }
+                                show-commit-context-menu = false;
+                            }
+                        }
+                        HorizontalBox {
+                            padding-left: 8px; spacing: 8px;
+                            Text { text: "🔗"; font-size: 14px; vertical-alignment: center; width: 16px; }
+                            Text { text: "Open on GitHub"; font-size: 14px; color: #c9d1d9; vertical-alignment: center; }
+                        }
+                    }
+                    
+                    // セパレータ
+                    Rectangle { height: 1px; background: #444; }
+                    
+                    // Reset to This Commit (サブメニュー付き)
+                    Rectangle {
+                        height: 28px; border-radius: 3px;
+                        background: reset-ta.has-hover ? #3d3d3d : transparent;
+                        reset-ta := TouchArea {
+                            clicked => { show-reset-submenu = !show-reset-submenu; }
+                        }
+                        HorizontalBox {
+                            padding-left: 8px; spacing: 8px;
+                            Text { text: "⏪"; font-size: 14px; vertical-alignment: center; width: 16px; }
+                            Text { text: "Reset to This Commit"; font-size: 14px; color: #c9d1d9; vertical-alignment: center; }
+                            Rectangle { }
+                            Text { text: "▶"; font-size: 12px; color: #888; vertical-alignment: center; }
+                        }
+                    }
+                    
+                    // Revert Commit
+                    Rectangle {
+                        height: 28px; border-radius: 3px;
+                        background: revert-ta.has-hover ? #3d3d3d : transparent;
+                        revert-ta := TouchArea {
+                            clicked => {
+                                if context-menu-commit-index >= 0 {
+                                    revert-commit(context-menu-commit-index);
+                                }
+                                show-commit-context-menu = false;
+                            }
+                        }
+                        HorizontalBox {
+                            padding-left: 8px; spacing: 8px;
+                            Text { text: "↩️"; font-size: 14px; vertical-alignment: center; width: 16px; }
+                            Text { text: "Revert Commit"; font-size: 14px; color: #c9d1d9; vertical-alignment: center; }
+                        }
+                    }
+                }
+            }
+            
+            // Reset サブメニュー
+            if show-reset-submenu: Rectangle {
+                x: min(commit-context-menu-x + 200px, parent.width - 130px);
+                y: min(commit-context-menu-y + 68px, parent.height - 100px);
+                width: 120px;
+                height: 100px;
+                background: #2d2d2d; border-radius: 4px;
+                drop-shadow-blur: 8px; drop-shadow-color: #00000080;
+                
+                TouchArea { }
+                
+                VerticalBox {
+                    padding: 4px; spacing: 2px;
+                    
+                    // Soft Reset
+                    Rectangle {
+                        height: 28px; border-radius: 3px;
+                        background: soft-ta.has-hover ? #3d3d3d : transparent;
+                        soft-ta := TouchArea {
+                            clicked => {
+                                reset-to-commit(context-menu-commit-index, "soft");
+                                show-commit-context-menu = false;
+                                show-reset-submenu = false;
+                            }
+                        }
+                        HorizontalBox {
+                            padding-left: 8px; spacing: 8px;
+                            Text { text: "Soft"; font-size: 14px; color: #7ee787; vertical-alignment: center; }
+                        }
+                    }
+                    
+                    // Mixed Reset
+                    Rectangle {
+                        height: 28px; border-radius: 3px;
+                        background: mixed-ta.has-hover ? #3d3d3d : transparent;
+                        mixed-ta := TouchArea {
+                            clicked => {
+                                reset-to-commit(context-menu-commit-index, "mixed");
+                                show-commit-context-menu = false;
+                                show-reset-submenu = false;
+                            }
+                        }
+                        HorizontalBox {
+                            padding-left: 8px; spacing: 8px;
+                            Text { text: "Mixed"; font-size: 14px; color: #f5c211; vertical-alignment: center; }
+                        }
+                    }
+                    
+                    // Hard Reset
+                    Rectangle {
+                        height: 28px; border-radius: 3px;
+                        background: hard-ta.has-hover ? #3d3d3d : transparent;
+                        hard-ta := TouchArea {
+                            clicked => {
+                                reset-to-commit(context-menu-commit-index, "hard");
+                                show-commit-context-menu = false;
+                                show-reset-submenu = false;
+                            }
+                        }
+                        HorizontalBox {
+                            padding-left: 8px; spacing: 8px;
+                            Text { text: "Hard"; font-size: 14px; color: #f85149; vertical-alignment: center; }
+                        }
+                    }
+                }
+            }
+        }
+        
+    }
+
+    // Clone Dialog Properties
+    in-out property <bool> show-clone-dialog: false;
+    in-out property <string> clone-url: "";
+    in-out property <string> clone-path: "";
+    in-out property <bool> is-cloning: false;
+    in-out property <string> clone-error: "";
+
+    callback clone-repo(string, string); // url, path
+    callback browse-clone-path();
+
+    // Repository Sidebar Overlay
+    if show-repo-sidebar: Rectangle {
+        width: 100%; height: 100%;
+        background: #00000080; // 半透明の背景（バックドロップ）
+        z: 100; // 最前面に表示
+
+        // 背景クリックで閉じる
+        TouchArea {
+            clicked => { show-repo-sidebar = false; }
+        }
+
+        // サイドバー本体
+        Rectangle {
+            x: 0px; y: 0px;
+            width: repo-sidebar-width;
+            height: 100%;
+            background: #252526;
+            
+            // サイドバー内部のクリックイベントがバックドロップに抜けないようにする
+            TouchArea {}
+
+            VerticalBox { padding: 4px; spacing: 4px;
+                HorizontalBox { height: 32px; padding-left: 8px;
+                    Text { text: "Repositories"; font-size: 14px; font-weight: 600; color: #c9d1d9; vertical-alignment: center; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Rectangle {
+                        width: 32px;
+                        border-radius: 4px;
+                        background: close-btn-ta.has-hover ? #3c3c3c : transparent;
+                        
+                        Text { 
+                            text: "×"; 
+                            font-size: 20px; 
+                            color: #c9d1d9; 
+                            horizontal-alignment: center; 
+                            vertical-alignment: center;
+                        }
+                        
+                        close-btn-ta := TouchArea {
+                            clicked => { show-repo-sidebar = false; }
+                        }
+                    }
+                }
+                
+                Rectangle { height: 1px; background: #3c3c3c; }
+
+                Rectangle { vertical-stretch: 1; background: #1e1e1e; border-radius: 4px;
+                    ScrollView { VerticalBox { alignment: start;
+                        for repo[idx] in recent-repos: Rectangle {
+                            height: 32px;
+                            background: repo-path == repo ? #3584e4 : (repo-ta.has-hover ? #2a2d2e : transparent);
+                            repo-ta := TouchArea { 
+                                clicked => { 
+                                    repo-path = repo; 
+                                    open-repo(repo); 
+                                    show-repo-sidebar = false; // 選択したら閉じる
+                                } 
+                            }
+                            HorizontalBox { padding: 4px; spacing: 8px;
+                                Text { text: "📁"; font-size: 14px; vertical-alignment: center; width: 16px; }
+                                Text { text: repo; font-size: 13px; color: repo-path == repo ? white : #c9d1d9; vertical-alignment: center; overflow: elide; }
+                            }
+                        }
+                    } }
+                }
+                
+                // Open / Clone Buttons
+                HorizontalBox {
+                    height: 45px;
+                    spacing: 8px;
+                    Button {
+                        text: "📂 Open Local...";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            browse-repo();
+                            show-repo-sidebar = false;
+                        }
+                    }
+                    Button {
+                        text: "📥 Clone...";
+                        horizontal-stretch: 1;
+                        clicked => {
+                            show-clone-dialog = true;
+                            // show-repo-sidebar = false; // Keep sidebar open or close? Let's keep it open or close it? 
+                            // Usually modal dialogs are separate. Let's close sidebar to avoid clutter
+                            show-repo-sidebar = false; 
+                            clone-url = "";
+                            clone-path = "";
+                            clone-error = "";
+                        }
+                    }
+                }
+                
+                Rectangle { height: 8px; } // Bottom spacing
+            }
+            
+            // 右端のボーダー
+            Rectangle {
+                x: parent.width - 1px; y: 0; width: 1px; height: 100%; background: #3c3c3c;
+            }
+        }
+    }
+
+    // Clone Dialog Overlay
+    if show-clone-dialog: Rectangle {
+        width: 100%; height: 100%;
+        background: #00000080;
+        z: 200; // サイドバーより上
+
+        TouchArea {
+            clicked => { if (!is-cloning) { show-clone-dialog = false; } }
+        }
+
+        Rectangle {
+            width: 500px;
+            height: 360px;
+            background: #252526;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #444;
+            
+            TouchArea {} // Prevent click through
+
+            VerticalBox {
+                padding: 16px;
+                spacing: 12px;
+
+                Text { text: "Clone Repository"; font-size: 18px; font-weight: 600; color: #c9d1d9; }
+
+                VerticalBox { spacing: 4px;
+                    Text { text: "Repository URL"; font-size: 14px; color: #8b949e; }
+                    ModalLineEdit { 
+                        text <=> clone-url;
+                        placeholder-text: "https://github.com/username/repo.git";
+                        // enabled: !is-cloning; // ModalLineEdit might not support enabled yet, need to check def.
+                        // Assuming basic replacement first. 
+                    }
+                }
+
+                VerticalBox { spacing: 4px;
+                    Text { text: "Destination Path"; font-size: 14px; color: #8b949e; }
+                    HorizontalBox { spacing: 8px;
+                        ModalLineEdit { 
+                            text <=> clone-path;
+                            placeholder-text: "/path/to/destination";
+                            // enabled: !is-cloning;
+                        }
+                        Button {
+                            text: "📂";
+                            width: 32px;
+                            enabled: !is-cloning;
+                            clicked => { browse-clone-path(); }
+                        }
+                    }
+                }
+
+                if clone-error != "": Text {
+                    text: clone-error;
+                    color: #e01b24;
+                    font-size: 14px;
+                    wrap: word-wrap;
+                }
+
+                Rectangle { vertical-stretch: 1; }
+
+                HorizontalBox { spacing: 12px; alignment: end;
+                    ModalButton {
+                        text: "Cancel";
+                        // enabled: !is-cloning;
+                        clicked => { show-clone-dialog = false; }
+                    }
+                    ModalButton {
+                        text: is-cloning ? "Cloning..." : "Clone";
+                        primary: true;
+                        // enabled: !is-cloning && clone-url != "" && clone-path != ""; // Will check custom component logic
+                        clicked => {
+                            if (!is-cloning && clone-url != "" && clone-path != "") {
+                                is-cloning = true;
+                                clone-error = "";
+                                clone-repo(clone-url, clone-path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Stash Context Menu
+    if show-stash-context-menu: Rectangle {
+        width: 100%; height: 100%; z: 200;
+        TouchArea { clicked => { show-stash-context-menu = false; } }
+        
+        Rectangle {
+            x: min(context-menu-stash-x, parent.width - 150px);
+            y: min(context-menu-stash-y, parent.height - 100px);
+            width: 140px;
+            height: 84px;
+            background: #2d2d2d; border-radius: 4px;
+            drop-shadow-blur: 8px; drop-shadow-color: #00000080;
+            
+            TouchArea { }
+            
+            VerticalBox {
+                padding: 4px; spacing: 2px;
+                // Apply
+                Rectangle {
+                    height: 24px; border-radius: 3px;
+                    background: apply-ta.has-hover ? #3d3d3d : transparent;
+                    apply-ta := TouchArea {
+                        clicked => {
+                            stash-apply(context-menu-stash-index);
+                            show-stash-context-menu = false;
+                        }
+                    }
+                    Text { text: "Apply Stash"; font-size: 14px; color: #c9d1d9; x: 8px; vertical-alignment: center; }
+                }
+                // Pop
+                Rectangle {
+                    height: 24px; border-radius: 3px;
+                    background: pop-ta.has-hover ? #3d3d3d : transparent;
+                    pop-ta := TouchArea {
+                        clicked => {
+                            stash-pop(context-menu-stash-index);
+                            show-stash-context-menu = false;
+                        }
+                    }
+                    Text { text: "Pop Stash"; font-size: 14px; color: #c9d1d9; x: 8px; vertical-alignment: center; }
+                }
+                // Drop
+                Rectangle {
+                    height: 24px; border-radius: 3px;
+                    background: drop-ta.has-hover ? #3d3d3d : transparent;
+                    drop-ta := TouchArea {
+                        clicked => {
+                            stash-drop(context-menu-stash-index);
+                            show-stash-context-menu = false;
+                        }
+                    }
+                    Text { text: "Drop Stash"; font-size: 14px; color: #e01b24; x: 8px; vertical-alignment: center; }
+                }
+            }
+        }
+    }
+
+    // Commit History Modal
+    if show-commit-history-modal: CommitHistoryModal {
+        history: commit-message-history;
+        select(msg) => {
+            commit-message = msg;
+            show-commit-history-modal = false;
+        }
+        close => { show-commit-history-modal = false; }
+    }
+
+
+    // Create Stash Overlay
+    if show-create-stash: Rectangle {
+        width: 100%; height: 100%;
+        background: #00000080;
+        z: 100;
+
+        TouchArea { clicked => { show-create-stash = false; } }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 400px; height: 220px;
+            background: #252526;
+            border-radius: 8px; border-width: 1px; border-color: #444;
+            
+            TouchArea {} // Prevent click-through
+
+            VerticalBox { padding: 16px; spacing: 12px;
+                Text { text: "Create Stash"; font-size: 18px; font-weight: 600; color: #c9d1d9; }
+                
+                VerticalBox { spacing: 4px;
+                    Text { text: "Message (optional)"; font-size: 14px; color: #8b949e; }
+                    ModalLineEdit { 
+                        placeholder-text: "WIP: description..."; 
+                        text <=> new-stash-message; 
+                        accepted => { stash-save(new-stash-message, true); new-stash-message = ""; show-create-stash = false; }
+                    }
+                }
+
+                HorizontalBox { alignment: end; spacing: 12px;
+                    ModalButton { text: "Cancel"; clicked => { show-create-stash = false; } }
+                    ModalButton { 
+                        text: "Create"; 
+                        primary: true; 
+                        clicked => { stash-save(new-stash-message, true); new-stash-message = ""; show-create-stash = false; } 
+                    }
+                }
+            }
+        }
+    }
+    // Create Branch Overlay
+    if show-create-branch: Rectangle {
+        width: 100%; height: 100%;
+        background: #00000080;
+        z: 100;
+
+        TouchArea { clicked => { show-create-branch = false; } }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 400px; height: 220px;
+            background: #252526;
+            border-radius: 8px; border-width: 1px; border-color: #444;
+            
+            TouchArea {} // Prevent click-through
+
+            VerticalBox { padding: 16px; spacing: 12px;
+                Text { text: "Create Branch"; font-size: 18px; font-weight: 600; color: #c9d1d9; }
+                
+                VerticalBox { spacing: 4px;
+                    Text { text: "Branch Name"; font-size: 14px; color: #8b949e; }
+                    
+                    ModalLineEdit { 
+                        placeholder-text: "new-feature-branch"; 
+                        text <=> new-branch-name; 
+                        accepted => { 
+                            create-branch(new-branch-name); 
+                            new-branch-name = ""; 
+                            show-create-branch = false; 
+                        }
+                    }
+                }
+
+                HorizontalBox { alignment: end; spacing: 12px;
+                    ModalButton { text: "Cancel"; clicked => { show-create-branch = false; } }
+                    ModalButton { 
+                        text: "Create"; 
+                        primary: true; 
+                        clicked => { 
+                            create-branch(new-branch-name); 
+                            new-branch-name = ""; 
+                            show-create-branch = false; 
+                        } 
+                    }
+                }
+            }
+        }
+    }
+}
+

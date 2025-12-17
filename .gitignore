@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+target/
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# Build outputs
+dist/
+build/
+.svelte-kit/
+
+# Database
+*.db
+*.sqlite
+
+# Docker volumes
+postgres_data/
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/

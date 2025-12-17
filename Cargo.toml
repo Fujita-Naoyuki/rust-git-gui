@@ -1,0 +1,19 @@
+[package]
+name = "rust_git_gui"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0"
+
+[dependencies]
+slint = "1.14"
+git2 = "0.20"
+chrono = "0.4"
+dirs = "6.0"
+serde_json = "1.0"
+rfd = "0.16"
+arboard = "3.6"
+open = "5.3"
+
+[build-dependencies]
+slint-build = "1.14"
+
