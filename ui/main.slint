@@ -299,7 +299,7 @@ component LocalBranchItem inherits Rectangle {
     in property <bool> selected: false;
     in property <int> ahead: 0;
     in property <int> behind: 0;
-    callback clicked(); callback delete-clicked(); callback double-clicked();
+    callback clicked(); callback double-clicked();
     callback right-clicked(length, length);  // マウス位置を親に通知
     height: 28px; background: selected ? #2a2d2e : (is-current ? #1a3a1a : transparent);
     ta := TouchArea { 
@@ -326,7 +326,6 @@ component LocalBranchItem inherits Rectangle {
                 if behind > 0: Text { text: "⬇️" + behind; font-size: 13px; color: #f97583; vertical-alignment: center; }
             }
         }
-        if !is-current: Button { text: "🗑"; width: 28px; height: 24px; clicked => { root.delete-clicked(); } }
     }
 }
 
@@ -614,7 +613,6 @@ export component MainWindow inherits Window {
                                 for branch[idx] in local-branches: LocalBranchItem { name: branch.name; is-current: branch.is-current; ahead: branch.ahead; behind: branch.behind; selected: idx == selected-branch;
                                     clicked => { selected-branch = idx; show-branch-context-menu = false; }
                                     double-clicked => { if !branch.is-current { checkout-branch(branch.name); } }
-                                    delete-clicked => { delete-branch(branch.name); }
                                     right-clicked(mx, my) => {
                                         context-menu-branch-index = idx;
                                         context-menu-branch-name = branch.name;
@@ -1071,11 +1069,15 @@ export component MainWindow inherits Window {
             // コンテキストメニュー本体
             Rectangle {
                 x: min(context-menu-x, parent.width - 190px);
-                y: min(context-menu-y, parent.height - (context-menu-branch-index >= 0 && context-menu-branch-index < local-branches.length && !local-branches[context-menu-branch-index].is-current ? 188px : 102px));
+                // メニュー項目数に応じた高さ計算:
+                // - 基本: Checkout + Copy = 2項目
+                // - サイドバーから (index >= 0): + PR = 3項目
+                // - 非カレントブランチ: + Merge + Delete = 5項目
+                property <int> menu-item-count: context-menu-branch-index >= 0 && context-menu-branch-index < local-branches.length && !local-branches[context-menu-branch-index].is-current ? 5 : (context-menu-branch-index >= 0 ? 3 : 2);
+                property <length> menu-height: menu-item-count * ContextMenuStyle.item-height + ContextMenuStyle.menu-padding * 2 + (menu-item-count - 1) * ContextMenuStyle.menu-spacing;
+                y: min(context-menu-y, parent.height - menu-height);
                 width: 180px;
-                // サイドバーからのクリック: Checkout, Copy, PR, Merge (index >= 0)
-                // Graphからのクリック: Checkout, Copy のみ (index == -1)
-                height: context-menu-branch-index >= 0 && context-menu-branch-index < local-branches.length && !local-branches[context-menu-branch-index].is-current ? 180px : (context-menu-branch-index >= 0 ? 138px : 96px);
+                height: menu-height;
                 background: #2d2d2d; border-radius: 4px;
                 drop-shadow-blur: 8px; drop-shadow-color: #00000080;
                 
@@ -1160,6 +1162,22 @@ export component MainWindow inherits Window {
                             Text { text: "Merge into Current"; font-size: 14px; color: #c9d1d9; vertical-alignment: center; }
                         }
                     }
+                    // Delete Branch (only for non-current local branches)
+                    if context-menu-branch-index >= 0 && context-menu-branch-index < local-branches.length && !local-branches[context-menu-branch-index].is-current && !context-menu-branch-is-remote: Rectangle {
+                        height: ContextMenuStyle.item-height; border-radius: 3px;
+                        background: delete-branch-ta.has-hover ? #e01b2440 : transparent;
+                        delete-branch-ta := TouchArea {
+                            clicked => {
+                                delete-branch(local-branches[context-menu-branch-index].name);
+                                show-branch-context-menu = false;
+                            }
+                        }
+                        HorizontalBox {
+                            padding-left: 8px; spacing: 8px;
+                            Text { text: "🗑"; font-size: 14px; vertical-alignment: center; width: 16px; }
+                            Text { text: "Delete Branch"; font-size: 14px; color: #e01b24; vertical-alignment: center; }
+                        }
+                    }
                 }
             }
         }
@@ -1183,9 +1201,12 @@ export component MainWindow inherits Window {
             // コンテキストメニュー本体
             Rectangle {
                 x: min(commit-context-menu-x, parent.width - 220px);
-                y: min(commit-context-menu-y, parent.height - 248px);
+                // 5項目 + セパレータ (1px)
+                property <int> menu-item-count: 5;
+                property <length> menu-height: menu-item-count * ContextMenuStyle.item-height + ContextMenuStyle.menu-padding * 2 + (menu-item-count - 1) * ContextMenuStyle.menu-spacing + 1px;
+                y: min(commit-context-menu-y, parent.height - menu-height);
                 width: 210px;
-                height: 240px;
+                height: menu-height;
                 background: #2d2d2d; border-radius: 4px;
                 drop-shadow-blur: 8px; drop-shadow-color: #00000080;
                 
@@ -1293,10 +1314,13 @@ export component MainWindow inherits Window {
             
             // Reset サブメニュー
             if show-reset-submenu: Rectangle {
+                // 3項目: Soft, Mixed, Hard
+                property <int> menu-item-count: 3;
+                property <length> menu-height: menu-item-count * ContextMenuStyle.item-height + ContextMenuStyle.menu-padding * 2 + (menu-item-count - 1) * ContextMenuStyle.menu-spacing;
                 x: min(commit-context-menu-x + 200px, parent.width - 130px);
-                y: min(commit-context-menu-y + 102px, parent.height - 142px);
+                y: min(commit-context-menu-y + 102px, parent.height - menu-height);
                 width: 120px;
-                height: 142px;
+                height: menu-height;
                 background: #2d2d2d; border-radius: 4px;
                 drop-shadow-blur: 8px; drop-shadow-color: #00000080;
                 
@@ -1745,9 +1769,12 @@ export component MainWindow inherits Window {
         
         Rectangle {
             x: min(context-menu-stash-x, parent.width - 150px);
-            y: min(context-menu-stash-y, parent.height - 146px);
+            // 3項目: Apply, Pop, Drop
+            property <int> menu-item-count: 3;
+            property <length> menu-height: menu-item-count * ContextMenuStyle.item-height + ContextMenuStyle.menu-padding * 2 + (menu-item-count - 1) * ContextMenuStyle.menu-spacing;
+            y: min(context-menu-stash-y, parent.height - menu-height);
             width: 140px;
-            height: 138px;
+            height: menu-height;
             background: #2d2d2d; border-radius: 4px;
             drop-shadow-blur: 8px; drop-shadow-color: #00000080;
             
