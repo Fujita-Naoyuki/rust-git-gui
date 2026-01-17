@@ -973,9 +973,14 @@ impl GitClient {
         if let Ok(branch_iter) = repo.branches(Some(BranchType::Local)) {
             for branch in branch_iter.flatten() {
                 if let Some(name) = branch.0.name().ok().flatten() {
+                    // リモートとの差分を計算
+                    let (ahead, behind) = self.get_ahead_behind(repo, name);
+
                     branches.push(LocalBranchData {
                         name: name.into(),
                         is_current: name == current,
+                        ahead: ahead as i32,
+                        behind: behind as i32,
                     });
                 }
             }
@@ -983,6 +988,30 @@ impl GitClient {
 
         branches.sort_by(|a, b| b.is_current.cmp(&a.is_current));
         branches
+    }
+
+    /// ローカルブランチとリモートブランチのahead/behindを計算
+    fn get_ahead_behind(&self, repo: &Repository, branch_name: &str) -> (usize, usize) {
+        // リモートブランチ名を構築（origin/<branch_name>）
+        let remote_name = format!("origin/{}", branch_name);
+
+        // ローカルとリモートのOIDを取得
+        let local_oid = repo
+            .revparse_single(branch_name)
+            .ok()
+            .and_then(|obj| obj.peel_to_commit().ok())
+            .map(|c| c.id());
+
+        let remote_oid = repo
+            .revparse_single(&remote_name)
+            .ok()
+            .and_then(|obj| obj.peel_to_commit().ok())
+            .map(|c| c.id());
+
+        match (local_oid, remote_oid) {
+            (Some(local), Some(remote)) => repo.graph_ahead_behind(local, remote).unwrap_or((0, 0)),
+            _ => (0, 0), // リモートが存在しない場合
+        }
     }
 
     fn get_remote_branches(&self) -> Vec<RemoteBranchData> {

@@ -11,7 +11,7 @@ export struct StashData { index: int, message: string }
 export struct CommitBranchInfo { name: string, is-current: bool, is-remote: bool }
 export struct CommitData { hash: string, full-hash: string, message: string, author: string, date: string, branches: [CommitBranchInfo], graph-column: int, graph-color: color, is-merge: bool, is-head: bool, is-uncommitted: bool, svg-path-0: string, svg-path-1: string, svg-path-2: string, svg-path-3: string, svg-path-4: string, svg-path-5: string, svg-path-6: string, svg-path-7: string, node-path: string }
 export struct FileData { filename: string, status: string, staged: bool }
-export struct LocalBranchData { name: string, is-current: bool }
+export struct LocalBranchData { name: string, is-current: bool, ahead: int, behind: int }
 export struct RemoteBranchData { name: string }
 export struct DiffLineData { content: string, line-type: string, old-line-num: int, new-line-num: int, hunk-index: int }
 export struct DiffFileData { filename: string, status: string }
@@ -294,7 +294,11 @@ component FileItem inherits Rectangle {
 
 
 component LocalBranchItem inherits Rectangle {
-    in property <string> name; in property <bool> is-current: false; in property <bool> selected: false;
+    in property <string> name; 
+    in property <bool> is-current: false; 
+    in property <bool> selected: false;
+    in property <int> ahead: 0;
+    in property <int> behind: 0;
     callback clicked(); callback delete-clicked(); callback double-clicked();
     callback right-clicked(length, length);  // マウス位置を親に通知
     height: 28px; background: selected ? #2a2d2e : (is-current ? #1a3a1a : transparent);
@@ -310,8 +314,18 @@ component LocalBranchItem inherits Rectangle {
     HorizontalBox {
         padding: 2px; padding-left: 6px; spacing: 4px;
         Text { text: is-current ? "●" : "○"; font-size: 14px; color: is-current ? #2ec27e : #555; width: 14px; vertical-alignment: center; }
-        Text { text: name; font-size: 14px; color: selected ? #58a6ff : (is-current ? #2ec27e : #c9d1d9); font-weight: is-current ? 600 : 400; vertical-alignment: center; overflow: elide; }
-        Rectangle { }
+        Text { text: name; font-size: 14px; color: selected ? #58a6ff : (is-current ? #2ec27e : #c9d1d9); font-weight: is-current ? 600 : 400; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+        // ahead/behind表示（差分がある場合のみ）
+        if ahead > 0 || behind > 0: Rectangle {
+            background: #3c3c3c;
+            border-radius: 4px;
+            height: 24px;
+            HorizontalBox {
+                padding-left: 6px; padding-right: 6px; spacing: 4px;
+                if ahead > 0: Text { text: "⬆️" + ahead; font-size: 13px; color: #7ee787; vertical-alignment: center; }
+                if behind > 0: Text { text: "⬇️" + behind; font-size: 13px; color: #f97583; vertical-alignment: center; }
+            }
+        }
         if !is-current: Button { text: "🗑"; width: 28px; height: 24px; clicked => { root.delete-clicked(); } }
     }
 }
@@ -597,7 +611,7 @@ export component MainWindow inherits Window {
 
                         local-branch-list := Rectangle { vertical-stretch: 1; background: #1e1e1e; border-radius: 4px;
                             ScrollView { VerticalBox { alignment: start;
-                                for branch[idx] in local-branches: LocalBranchItem { name: branch.name; is-current: branch.is-current; selected: idx == selected-branch;
+                                for branch[idx] in local-branches: LocalBranchItem { name: branch.name; is-current: branch.is-current; ahead: branch.ahead; behind: branch.behind; selected: idx == selected-branch;
                                     clicked => { selected-branch = idx; show-branch-context-menu = false; }
                                     double-clicked => { if !branch.is-current { checkout-branch(branch.name); } }
                                     delete-clicked => { delete-branch(branch.name); }
