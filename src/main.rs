@@ -265,6 +265,32 @@ fn add_recent_repo(path: &str) -> Vec<String> {
     repos
 }
 
+/// リポジトリを一覧から削除
+fn remove_recent_repo(index: usize) -> Vec<String> {
+    let mut repos = load_recent_repos();
+    if index < repos.len() {
+        repos.remove(index);
+        save_recent_repos(&repos);
+    }
+    repos
+}
+
+/// リポジトリの順序を変更
+fn reorder_recent_repos(from_idx: usize, to_idx: usize) -> Vec<String> {
+    let mut repos = load_recent_repos();
+    if from_idx < repos.len() && to_idx <= repos.len() && from_idx != to_idx {
+        let item = repos.remove(from_idx);
+        let insert_idx = if to_idx > from_idx {
+            to_idx - 1
+        } else {
+            to_idx
+        };
+        repos.insert(insert_idx.min(repos.len()), item);
+        save_recent_repos(&repos);
+    }
+    repos
+}
+
 // クリップボードにテキストをコピー（クロスプラットフォーム対応・非同期）
 // Linux: 別スレッドで.wait()を使用してクリップボードマネージャーに内容が渡されるまで待機
 // Windows/macOS: クリップボードは同期的に動作するため、通常のset_text()を使用
@@ -2228,6 +2254,36 @@ fn main() -> Result<(), slint::PlatformError> {
                         ui.set_status_message(SharedString::from(format!("Error: {}", e)));
                     }
                 }
+            }
+        });
+    }
+
+    // Remove repository from recent list
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_remove_repo(move |index| {
+            let repos = remove_recent_repo(index as usize);
+            if let Some(ui) = ui_weak.upgrade() {
+                let recent_model: Vec<SharedString> = repos
+                    .iter()
+                    .map(|s| SharedString::from(s.as_str()))
+                    .collect();
+                ui.set_recent_repos(ModelRc::new(VecModel::from(recent_model)));
+            }
+        });
+    }
+
+    // Reorder repositories in recent list
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_reorder_repos(move |from_idx, to_idx| {
+            let repos = reorder_recent_repos(from_idx as usize, to_idx as usize);
+            if let Some(ui) = ui_weak.upgrade() {
+                let recent_model: Vec<SharedString> = repos
+                    .iter()
+                    .map(|s| SharedString::from(s.as_str()))
+                    .collect();
+                ui.set_recent_repos(ModelRc::new(VecModel::from(recent_model)));
             }
         });
     }
