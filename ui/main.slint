@@ -907,7 +907,7 @@ export component MainWindow inherits Window {
                         Text { text: "Unstaged (" + unstaged-files.length + ")"; font-size: 14px; font-weight: 600; color: #e01b24; vertical-alignment: center; }
                         if unstaged-checked-count > 0: Text { text: " • " + unstaged-checked-count + " selected"; font-size: 13px; color: #8b949e; vertical-alignment: center; }
                         Rectangle { }
-                        Button { text: "🗑"; enabled: unstaged-checked-count > 0; clicked => { discard-selected(); } }
+                        Button { text: "Discard"; enabled: unstaged-checked-count > 0; clicked => { discard-selected(); } }
                         Button { text: "Stage Selected"; enabled: unstaged-checked-count > 0; clicked => { stage-selected(); } }
                         Button { text: "Stage All"; enabled: unstaged-files.length > 0; clicked => { stage-all(); } }
                     }
@@ -938,7 +938,7 @@ export component MainWindow inherits Window {
                         padding-left: 4px; padding-right: 4px;
                         Text { text: "Commit Message"; font-size: 14px; font-weight: 600; color: #c9d1d9; vertical-alignment: center; horizontal-stretch: 1; }
                         Button { 
-                            text: "🕒 History"; 
+                            text: "History"; 
                             enabled: commit-message-history.length > 0;
                             clicked => { show-commit-history-modal = true; }
                         }
