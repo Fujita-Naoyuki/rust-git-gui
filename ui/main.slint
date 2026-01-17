@@ -1,5 +1,12 @@
 import { Button, ListView, LineEdit, VerticalBox, HorizontalBox, ScrollView, StandardButton, ComboBox } from "std-widgets.slint";
 
+// コンテキストメニュー共通定数
+global ContextMenuStyle {
+    out property <length> item-height: 42px;
+    out property <length> menu-padding: 4px;
+    out property <length> menu-spacing: 2px;
+}
+
 export struct StashData { index: int, message: string }
 export struct CommitBranchInfo { name: string, is-current: bool, is-remote: bool }
 export struct CommitData { hash: string, full-hash: string, message: string, author: string, date: string, branches: [CommitBranchInfo], graph-column: int, graph-color: color, is-merge: bool, is-head: bool, is-uncommitted: bool, svg-path-0: string, svg-path-1: string, svg-path-2: string, svg-path-3: string, svg-path-4: string, svg-path-5: string, svg-path-6: string, svg-path-7: string, node-path: string }
@@ -1039,11 +1046,11 @@ export component MainWindow inherits Window {
             // コンテキストメニュー本体
             Rectangle {
                 x: min(context-menu-x, parent.width - 190px);
-                y: min(context-menu-y, parent.height - (context-menu-branch-index >= 0 && context-menu-branch-index < local-branches.length && !local-branches[context-menu-branch-index].is-current ? 138px : 74px));
+                y: min(context-menu-y, parent.height - (context-menu-branch-index >= 0 && context-menu-branch-index < local-branches.length && !local-branches[context-menu-branch-index].is-current ? 188px : 102px));
                 width: 180px;
                 // サイドバーからのクリック: Checkout, Copy, PR, Merge (index >= 0)
                 // Graphからのクリック: Checkout, Copy のみ (index == -1)
-                height: context-menu-branch-index >= 0 && context-menu-branch-index < local-branches.length && !local-branches[context-menu-branch-index].is-current ? 130px : (context-menu-branch-index >= 0 ? 98px : 66px);
+                height: context-menu-branch-index >= 0 && context-menu-branch-index < local-branches.length && !local-branches[context-menu-branch-index].is-current ? 180px : (context-menu-branch-index >= 0 ? 138px : 96px);
                 background: #2d2d2d; border-radius: 4px;
                 drop-shadow-blur: 8px; drop-shadow-color: #00000080;
                 
@@ -1055,7 +1062,7 @@ export component MainWindow inherits Window {
                     
                     // Checkout Branch
                     Rectangle {
-                        height: 28px; border-radius: 3px;
+                        height: ContextMenuStyle.item-height; border-radius: 3px;
                         background: checkout-ta.has-hover ? #3d3d3d : transparent;
                         checkout-ta := TouchArea {
                             clicked => {
@@ -1078,7 +1085,7 @@ export component MainWindow inherits Window {
                     
                     // Copy Branch Name
                     Rectangle {
-                        height: 28px; border-radius: 3px;
+                        height: ContextMenuStyle.item-height; border-radius: 3px;
                         background: copy-ta.has-hover ? #3d3d3d : transparent;
                         copy-ta := TouchArea {
                             clicked => {
@@ -1096,7 +1103,7 @@ export component MainWindow inherits Window {
                     }
                     // Create Pull Request (サイドバーからのクリック時のみ表示)
                     if context-menu-branch-index >= 0: Rectangle {
-                        height: 28px; border-radius: 3px;
+                        height: ContextMenuStyle.item-height; border-radius: 3px;
                         background: pr-ta.has-hover ? #3d3d3d : transparent;
                         pr-ta := TouchArea {
                             clicked => {
@@ -1114,7 +1121,7 @@ export component MainWindow inherits Window {
                     }
                     // Merge into Current (only for non-current branches)
                     if context-menu-branch-index >= 0 && context-menu-branch-index < local-branches.length && !local-branches[context-menu-branch-index].is-current: Rectangle {
-                        height: 28px; border-radius: 3px;
+                        height: ContextMenuStyle.item-height; border-radius: 3px;
                         background: merge-ta.has-hover ? #3d3d3d : transparent;
                         merge-ta := TouchArea {
                             clicked => {
@@ -1151,9 +1158,9 @@ export component MainWindow inherits Window {
             // コンテキストメニュー本体
             Rectangle {
                 x: min(commit-context-menu-x, parent.width - 220px);
-                y: min(commit-context-menu-y, parent.height - 170px);
+                y: min(commit-context-menu-y, parent.height - 248px);
                 width: 210px;
-                height: 160px;
+                height: 240px;
                 background: #2d2d2d; border-radius: 4px;
                 drop-shadow-blur: 8px; drop-shadow-color: #00000080;
                 
@@ -1164,7 +1171,7 @@ export component MainWindow inherits Window {
                     
                     // Copy Commit Hash
                     Rectangle {
-                        height: 28px; border-radius: 3px;
+                        height: ContextMenuStyle.item-height; border-radius: 3px;
                         background: copy-hash-ta.has-hover ? #3d3d3d : transparent;
                         copy-hash-ta := TouchArea {
                             clicked => {
@@ -1183,7 +1190,7 @@ export component MainWindow inherits Window {
                     
                     // Copy Commit Message
                     Rectangle {
-                        height: 28px; border-radius: 3px;
+                        height: ContextMenuStyle.item-height; border-radius: 3px;
                         background: copy-msg-ta.has-hover ? #3d3d3d : transparent;
                         copy-msg-ta := TouchArea {
                             clicked => {
@@ -1202,7 +1209,7 @@ export component MainWindow inherits Window {
                     
                     // Open on GitHub
                     Rectangle {
-                        height: 28px; border-radius: 3px;
+                        height: ContextMenuStyle.item-height; border-radius: 3px;
                         background: github-ta.has-hover ? #3d3d3d : transparent;
                         github-ta := TouchArea {
                             clicked => {
@@ -1224,7 +1231,7 @@ export component MainWindow inherits Window {
                     
                     // Reset to This Commit (サブメニュー付き)
                     Rectangle {
-                        height: 28px; border-radius: 3px;
+                        height: ContextMenuStyle.item-height; border-radius: 3px;
                         background: reset-ta.has-hover ? #3d3d3d : transparent;
                         reset-ta := TouchArea {
                             clicked => { show-reset-submenu = !show-reset-submenu; }
@@ -1240,7 +1247,7 @@ export component MainWindow inherits Window {
                     
                     // Revert Commit
                     Rectangle {
-                        height: 28px; border-radius: 3px;
+                        height: ContextMenuStyle.item-height; border-radius: 3px;
                         background: revert-ta.has-hover ? #3d3d3d : transparent;
                         revert-ta := TouchArea {
                             clicked => {
@@ -1262,9 +1269,9 @@ export component MainWindow inherits Window {
             // Reset サブメニュー
             if show-reset-submenu: Rectangle {
                 x: min(commit-context-menu-x + 200px, parent.width - 130px);
-                y: min(commit-context-menu-y + 68px, parent.height - 100px);
+                y: min(commit-context-menu-y + 102px, parent.height - 142px);
                 width: 120px;
-                height: 100px;
+                height: 142px;
                 background: #2d2d2d; border-radius: 4px;
                 drop-shadow-blur: 8px; drop-shadow-color: #00000080;
                 
@@ -1275,7 +1282,7 @@ export component MainWindow inherits Window {
                     
                     // Soft Reset
                     Rectangle {
-                        height: 28px; border-radius: 3px;
+                        height: ContextMenuStyle.item-height; border-radius: 3px;
                         background: soft-ta.has-hover ? #3d3d3d : transparent;
                         soft-ta := TouchArea {
                             clicked => {
@@ -1292,7 +1299,7 @@ export component MainWindow inherits Window {
                     
                     // Mixed Reset
                     Rectangle {
-                        height: 28px; border-radius: 3px;
+                        height: ContextMenuStyle.item-height; border-radius: 3px;
                         background: mixed-ta.has-hover ? #3d3d3d : transparent;
                         mixed-ta := TouchArea {
                             clicked => {
@@ -1309,7 +1316,7 @@ export component MainWindow inherits Window {
                     
                     // Hard Reset
                     Rectangle {
-                        height: 28px; border-radius: 3px;
+                        height: ContextMenuStyle.item-height; border-radius: 3px;
                         background: hard-ta.has-hover ? #3d3d3d : transparent;
                         hard-ta := TouchArea {
                             clicked => {
@@ -1534,9 +1541,9 @@ export component MainWindow inherits Window {
         
         Rectangle {
             x: min(context-menu-stash-x, parent.width - 150px);
-            y: min(context-menu-stash-y, parent.height - 100px);
+            y: min(context-menu-stash-y, parent.height - 146px);
             width: 140px;
-            height: 84px;
+            height: 138px;
             background: #2d2d2d; border-radius: 4px;
             drop-shadow-blur: 8px; drop-shadow-color: #00000080;
             
@@ -1546,7 +1553,7 @@ export component MainWindow inherits Window {
                 padding: 4px; spacing: 2px;
                 // Apply
                 Rectangle {
-                    height: 24px; border-radius: 3px;
+                    height: ContextMenuStyle.item-height; border-radius: 3px;
                     background: apply-ta.has-hover ? #3d3d3d : transparent;
                     apply-ta := TouchArea {
                         clicked => {
@@ -1558,7 +1565,7 @@ export component MainWindow inherits Window {
                 }
                 // Pop
                 Rectangle {
-                    height: 24px; border-radius: 3px;
+                    height: ContextMenuStyle.item-height; border-radius: 3px;
                     background: pop-ta.has-hover ? #3d3d3d : transparent;
                     pop-ta := TouchArea {
                         clicked => {
@@ -1570,7 +1577,7 @@ export component MainWindow inherits Window {
                 }
                 // Drop
                 Rectangle {
-                    height: 24px; border-radius: 3px;
+                    height: ContextMenuStyle.item-height; border-radius: 3px;
                     background: drop-ta.has-hover ? #3d3d3d : transparent;
                     drop-ta := TouchArea {
                         clicked => {
