@@ -2183,6 +2183,7 @@ impl GitClient {
 
 fn main() -> Result<(), slint::PlatformError> {
     let ui = MainWindow::new()?;
+    ui.window().set_size(slint::LogicalSize::new(1600.0, 1000.0));
     let git_client = Rc::new(RefCell::new(GitClient::new()));
 
     // コミットメッセージ履歴を読み込み（最大10件保持）
