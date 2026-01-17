@@ -477,6 +477,11 @@ export component MainWindow inherits Window {
     in-out property <length> commit-context-menu-y: 0px;
     in-out property <bool> show-reset-submenu: false;
     
+    // コミットからブランチ作成ダイアログ用
+    in-out property <bool> show-create-branch-at-commit: false;
+    in-out property <string> create-branch-at-commit-hash: "";
+    in-out property <string> create-branch-at-commit-name: "";
+    
     // Unstagedファイル右クリックメニュー用の状態
     in-out property <bool> show-unstaged-context-menu: false;
     in-out property <string> context-menu-unstaged-file: "";
@@ -495,6 +500,7 @@ export component MainWindow inherits Window {
     callback browse-repo();  // フォルダ選択ダイアログ
     callback stage-all(); callback unstage-all(); callback commit(); callback commit-and-push(); callback checkout-branch(string);
     callback create-branch(string); callback delete-branch(string); callback merge-branch(string);
+    callback create-branch-at-commit(string, string);  // branch-name, commit-hash
     callback select-commit(int, string); callback select-file(string, bool); callback select-diff-file(int);
     callback pull(); callback push(); callback discard-file(string);
     callback update-local-state();  // 内部リフレッシュ用（非同期Fetch完了後に呼ばれる）
@@ -1201,8 +1207,8 @@ export component MainWindow inherits Window {
             // コンテキストメニュー本体
             Rectangle {
                 x: min(commit-context-menu-x, parent.width - 220px);
-                // 5項目 + セパレータ (1px)
-                property <int> menu-item-count: 5;
+                // 6項目 + セパレータ (1px)
+                property <int> menu-item-count: 6;
                 property <length> menu-height: menu-item-count * ContextMenuStyle.item-height + ContextMenuStyle.menu-padding * 2 + (menu-item-count - 1) * ContextMenuStyle.menu-spacing + 1px;
                 y: min(commit-context-menu-y, parent.height - menu-height);
                 width: 210px;
@@ -1269,6 +1275,27 @@ export component MainWindow inherits Window {
                             padding-left: 8px; spacing: 8px;
                             Text { text: "🔗"; font-size: 14px; vertical-alignment: center; width: 16px; }
                             Text { text: "Open on GitHub"; font-size: 14px; color: #c9d1d9; vertical-alignment: center; }
+                        }
+                    }
+                    
+                    // Create Branch Here
+                    Rectangle {
+                        height: ContextMenuStyle.item-height; border-radius: 3px;
+                        background: create-branch-ta.has-hover ? #3d3d3d : transparent;
+                        create-branch-ta := TouchArea {
+                            clicked => {
+                                if context-menu-commit-index >= 0 && context-menu-commit-index < commits.length {
+                                    create-branch-at-commit-hash = commits[context-menu-commit-index].full-hash;
+                                    create-branch-at-commit-name = "";
+                                    show-create-branch-at-commit = true;
+                                }
+                                show-commit-context-menu = false;
+                            }
+                        }
+                        HorizontalBox {
+                            padding-left: 8px; spacing: 8px;
+                            Text { text: "⎇"; font-size: 14px; vertical-alignment: center; width: 16px; color: #c9d1d9; }
+                            Text { text: "Create Branch Here"; font-size: 14px; color: #c9d1d9; vertical-alignment: center; }
                         }
                     }
                     
@@ -1916,6 +1943,63 @@ export component MainWindow inherits Window {
                             create-branch(new-branch-name); 
                             new-branch-name = ""; 
                             show-create-branch = false; 
+                        } 
+                    }
+                }
+            }
+        }
+    }
+
+    // Create Branch at Commit Dialog
+    if show-create-branch-at-commit: Rectangle {
+        width: 100%; height: 100%;
+        background: #00000080;
+        z: 100;
+
+        TouchArea { clicked => { show-create-branch-at-commit = false; } }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 400px; height: 260px;
+            background: #252526;
+            border-radius: 8px; border-width: 1px; border-color: #444;
+            
+            TouchArea {}
+
+            VerticalBox { padding: 16px; spacing: 12px;
+                Text { text: "Create Branch at Commit"; font-size: 18px; font-weight: 600; color: #c9d1d9; }
+                
+                VerticalBox { spacing: 4px;
+                    Text { text: "Commit"; font-size: 14px; color: #8b949e; }
+                    Text { text: create-branch-at-commit-hash; font-size: 12px; color: #58a6ff; }
+                }
+                
+                VerticalBox { spacing: 4px;
+                    Text { text: "Branch Name"; font-size: 14px; color: #8b949e; }
+                    
+                    ModalLineEdit { 
+                        placeholder-text: "new-feature-branch"; 
+                        text <=> create-branch-at-commit-name; 
+                        accepted => { 
+                            create-branch-at-commit(create-branch-at-commit-name, create-branch-at-commit-hash);
+                            create-branch-at-commit-name = "";
+                            create-branch-at-commit-hash = "";
+                            show-create-branch-at-commit = false; 
+                        }
+                    }
+                }
+
+                HorizontalBox { alignment: end; spacing: 12px;
+                    ModalButton { text: "Cancel"; clicked => { show-create-branch-at-commit = false; } }
+                    ModalButton { 
+                        text: "Create"; 
+                        primary: true; 
+                        clicked => { 
+                            create-branch-at-commit(create-branch-at-commit-name, create-branch-at-commit-hash);
+                            create-branch-at-commit-name = "";
+                            create-branch-at-commit-hash = "";
+                            show-create-branch-at-commit = false; 
                         } 
                     }
                 }

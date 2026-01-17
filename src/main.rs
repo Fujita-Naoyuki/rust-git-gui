@@ -1501,6 +1501,20 @@ impl GitClient {
         Ok(())
     }
 
+    fn create_branch_at_commit(&self, name: &str, commit_hash: &str) -> Result<(), String> {
+        let Some(repo) = &self.repo else {
+            return Err("No repository".into());
+        };
+
+        let oid = Oid::from_str(commit_hash).map_err(|e| e.to_string())?;
+        let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
+
+        repo.branch(name, &commit, false)
+            .map_err(|e| e.to_string())?;
+        self.checkout_branch(name)?;
+        Ok(())
+    }
+
     fn delete_branch(&self, name: &str) -> Result<(), String> {
         let Some(repo) = &self.repo else {
             return Err("No repository".into());
@@ -2924,6 +2938,37 @@ fn main() -> Result<(), slint::PlatformError> {
                         ui.set_status_message(SharedString::from(format!(
                             "Created branch: {}",
                             name
+                        )));
+                    }
+                }
+                Err(e) => {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.set_status_message(SharedString::from(format!(
+                            "Create branch error: {}",
+                            e
+                        )));
+                    }
+                }
+            }
+            drop(client);
+            refresh();
+        });
+    }
+
+    // Create branch at specific commit
+    {
+        let git_client = git_client.clone();
+        let refresh = refresh_ui.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_create_branch_at_commit(move |name, commit_hash| {
+            let client = git_client.borrow();
+            match client.create_branch_at_commit(&name, &commit_hash) {
+                Ok(()) => {
+                    if let Some(ui) = ui_weak.upgrade() {
+                        ui.set_status_message(SharedString::from(format!(
+                            "Created branch '{}' at {}",
+                            name,
+                            &commit_hash[..7.min(commit_hash.len())]
                         )));
                     }
                 }
