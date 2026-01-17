@@ -57,13 +57,14 @@ component ModalLineEdit inherits Rectangle {
 component ModalButton inherits Rectangle {
     in property <string> text;
     in property <bool> primary: false;
+    in property <bool> danger: false;
     callback clicked();
     
     height: 32px;
     border-radius: 4px;
-    background: primary ? #3584e4 : #3c3c3c;
+    background: danger ? #6b1c1c : (primary ? #3584e4 : #3c3c3c);
     border-width: 1px;
-    border-color: primary ? #3584e4 : #555;
+    border-color: danger ? #e01b24 : (primary ? #3584e4 : #555);
     
     ta := TouchArea {
         clicked => { root.clicked(); }
@@ -73,7 +74,7 @@ component ModalButton inherits Rectangle {
         padding-left: 12px; padding-right: 12px;
         Text {
             text: root.text;
-            color: white;
+            color: danger ? #ff6b6b : white;
             font-size: 14px;
             font-weight: 600;
             vertical-alignment: center;
@@ -84,12 +85,43 @@ component ModalButton inherits Rectangle {
     // Hover effect
     states [
         hover when ta.has-hover: {
-            background: primary ? #2a73cc : #4c4c4c;
+            background: danger ? #8b2525 : (primary ? #2a73cc : #4c4c4c);
         }
         pressed when ta.pressed: {
-            background: primary ? #1e5cb3 : #2d2d2d;
+            background: danger ? #4a1010 : (primary ? #1e5cb3 : #2d2d2d);
         }
     ]
+}
+
+// 危険操作用ボタン（赤色）
+component DangerButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback clicked();
+    
+    height: 28px;
+    border-radius: 4px;
+    background: enabled ? (ta.pressed ? #4a1010 : (ta.has-hover ? #8b2525 : #6b1c1c)) : #3c3c3c;
+    border-width: 1px;
+    border-color: enabled ? #e01b24 : #555;
+    opacity: enabled ? 1.0 : 0.5;
+    
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+    
+    HorizontalBox {
+        padding-left: 8px; padding-right: 8px;
+        Text {
+            text: root.text;
+            color: enabled ? #ff6b6b : #888;
+            font-size: 13px;
+            font-weight: 500;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+    }
 }
 
 component CommitHistoryModal inherits Rectangle {
@@ -495,6 +527,9 @@ export component MainWindow inherits Window {
     in-out property <int> unstaged-checked-count: 0;  // Unstagedの選択数
     in-out property <int> last-clicked-staged: -1;    // Shift選択用: 最後にクリックしたStaged index
     in-out property <int> last-clicked-unstaged: -1;  // Shift選択用: 最後にクリックしたUnstaged index
+    
+    // Discard確認ダイアログ用
+    in-out property <bool> show-discard-confirm: false;
     
     callback open-repo(string); callback refresh(); callback stage-file(string); callback unstage-file(string);
     callback browse-repo();  // フォルダ選択ダイアログ
@@ -907,9 +942,10 @@ export component MainWindow inherits Window {
                         Text { text: "Unstaged (" + unstaged-files.length + ")"; font-size: 14px; font-weight: 600; color: #e01b24; vertical-alignment: center; }
                         if unstaged-checked-count > 0: Text { text: " • " + unstaged-checked-count + " selected"; font-size: 13px; color: #8b949e; vertical-alignment: center; }
                         Rectangle { }
-                        Button { text: "Discard"; enabled: unstaged-checked-count > 0; clicked => { discard-selected(); } }
                         Button { text: "Stage Selected"; enabled: unstaged-checked-count > 0; clicked => { stage-selected(); } }
                         Button { text: "Stage All"; enabled: unstaged-files.length > 0; clicked => { stage-all(); } }
+                        Rectangle { width: 16px; }
+                        DangerButton { text: "Discard"; enabled: unstaged-checked-count > 0; clicked => { show-discard-confirm = true; } }
                     }
                     unstaged-list := Rectangle { vertical-stretch: 1; background: #1e1e1e; border-radius: 4px;
                         ScrollView { VerticalBox { alignment: start;
@@ -2003,6 +2039,48 @@ export component MainWindow inherits Window {
                             create-branch-at-commit-name = "";
                             create-branch-at-commit-hash = "";
                             show-create-branch-at-commit = false; 
+                        } 
+                    }
+                }
+            }
+        }
+    }
+
+    // Discard確認ダイアログ
+    if show-discard-confirm: Rectangle {
+        width: 100%; height: 100%;
+        background: #00000080;
+        z: 100;
+
+        TouchArea { clicked => { show-discard-confirm = false; } }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 400px; height: 180px;
+            background: #252526;
+            border-radius: 8px; border-width: 1px; border-color: #e01b24;
+            
+            TouchArea {}
+
+            VerticalBox { padding: 16px; spacing: 16px;
+                Text { text: "Discard Changes"; font-size: 18px; font-weight: 600; color: #e01b24; }
+                
+                Text { 
+                    text: "Are you sure you want to discard " + unstaged-checked-count + " file(s)?\nThis action cannot be undone."; 
+                    font-size: 14px; 
+                    color: #c9d1d9; 
+                    wrap: word-wrap;
+                }
+
+                HorizontalBox { alignment: end; spacing: 12px;
+                    ModalButton { text: "Cancel"; clicked => { show-discard-confirm = false; } }
+                    ModalButton { 
+                        text: "Discard"; 
+                        danger: true; 
+                        clicked => { 
+                            discard-selected();
+                            show-discard-confirm = false; 
                         } 
                     }
                 }
