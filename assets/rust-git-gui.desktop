@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=RustGitGUI
+Comment=Git client with visual commit graph
+Exec=/home/naoyuki/Git/rust-git-gui/target/release/rust_git_gui
+Icon=/home/naoyuki/Git/rust-git-gui/assets/icon.jpg
+Terminal=false
+Type=Application
+Categories=Development;RevisionControl;
+StartupWMClass=rust_git_gui
