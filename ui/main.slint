@@ -1303,11 +1303,13 @@ export component MainWindow inherits Window {
                     Rectangle { height: 1px; background: #444; }
                     
                     // Reset to This Commit (サブメニュー付き)
-                    Rectangle {
+                    reset-item := Rectangle {
                         height: ContextMenuStyle.item-height; border-radius: 3px;
-                        background: reset-ta.has-hover ? #3d3d3d : transparent;
+                        background: reset-ta.has-hover || show-reset-submenu ? #3d3d3d : transparent;
                         reset-ta := TouchArea {
-                            clicked => { show-reset-submenu = !show-reset-submenu; }
+                            changed has-hover => {
+                                if self.has-hover { show-reset-submenu = true; }
+                            }
                         }
                         HorizontalBox {
                             padding-left: 8px; spacing: 8px;
@@ -1340,7 +1342,8 @@ export component MainWindow inherits Window {
             }
             
             // Reset サブメニュー
-            if show-reset-submenu: Rectangle {
+            reset-submenu := Rectangle {
+                visible: show-reset-submenu;
                 // 3項目: Soft, Mixed, Hard
                 property <int> menu-item-count: 3;
                 property <length> menu-height: menu-item-count * ContextMenuStyle.item-height + ContextMenuStyle.menu-padding * 2 + (menu-item-count - 1) * ContextMenuStyle.menu-spacing;
@@ -1351,7 +1354,7 @@ export component MainWindow inherits Window {
                 background: #2d2d2d; border-radius: 4px;
                 drop-shadow-blur: 8px; drop-shadow-color: #00000080;
                 
-                TouchArea { }
+                reset-submenu-ta := TouchArea { }
                 
                 VerticalBox {
                     padding: 4px; spacing: 2px;
