@@ -38,6 +38,7 @@ component ModalLineEdit inherits Rectangle {
             text <=> root.text;
             color: white;
             font-size: 14px;
+            font-family: "Noto Sans CJK JP";
             vertical-alignment: center;
             single-line: true;
             accepted => { root.accepted(); }
@@ -1000,6 +1001,7 @@ export component MainWindow inherits Window {
                                 width: parent.width - 8px;
                                 text <=> commit-message;
                                 font-size: 14px;
+                                font-family: "Noto Sans CJK JP";
                                 color: #c9d1d9;
                                 selection-background-color: #264f78;
                                 selection-foreground-color: #ffffff;
