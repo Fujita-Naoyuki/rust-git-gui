@@ -4040,6 +4040,7 @@ dependencies = [
  "git2",
  "open",
  "rfd",
+ "serde",
  "serde_json",
  "slint",
  "slint-build",

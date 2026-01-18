@@ -5,6 +5,7 @@ use arboard::Clipboard;
 use arboard::SetExtLinux;
 use chrono::{DateTime, Local, TimeZone};
 use git2::{BranchType, DiffOptions, Oid, Repository, StatusOptions};
+use serde::{Deserialize, Serialize};
 use slint::{Color, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -235,12 +236,15 @@ fn save_commit_history(history: &[String]) {
 }
 
 fn load_recent_repos() -> Vec<String> {
-    let path = get_config_path();
-    if let Ok(content) = fs::read_to_string(&path) {
-        serde_json::from_str(&content).unwrap_or_default()
-    } else {
-        Vec::new()
-    }
+    let entries = load_repo_entries();
+    // エントリをフラットなリポジトリパスのリストに変換
+    entries
+        .iter()
+        .flat_map(|entry| match entry {
+            RepoEntry::Path(p) => vec![p.clone()],
+            RepoEntry::Group { repos, .. } => repos.clone(),
+        })
+        .collect()
 }
 
 fn save_recent_repos(repos: &[String]) {
@@ -254,15 +258,57 @@ fn save_recent_repos(repos: &[String]) {
 }
 
 fn add_recent_repo(path: &str) -> Vec<String> {
-    let mut repos = load_recent_repos();
-    // 既存のエントリを削除
-    repos.retain(|p| p != path);
+    let mut entries = load_repo_entries();
+
+    // グループ内に既に存在するかチェック
+    let in_group = entries.iter().any(|entry| {
+        if let RepoEntry::Group { repos, .. } = entry {
+            repos.contains(&path.to_string())
+        } else {
+            false
+        }
+    });
+
+    // グループ内にある場合は何もしない（グループ構造を維持）
+    if in_group {
+        return entries
+            .iter()
+            .flat_map(|entry| match entry {
+                RepoEntry::Path(p) => vec![p.clone()],
+                RepoEntry::Group { repos, .. } => repos.clone(),
+            })
+            .collect();
+    }
+
+    // トップレベルから該当パスを削除
+    entries.retain(|entry| match entry {
+        RepoEntry::Path(p) => p != path,
+        RepoEntry::Group { .. } => true,
+    });
+
     // 先頭に追加
-    repos.insert(0, path.to_string());
-    // 最大数を超えたら削除
-    repos.truncate(MAX_RECENT_REPOS);
-    save_recent_repos(&repos);
-    repos
+    entries.insert(0, RepoEntry::Path(path.to_string()));
+
+    // 最大数を超えたらトップレベルのパスのみ削除（グループは維持）
+    let mut path_count = 0;
+    entries.retain(|entry| match entry {
+        RepoEntry::Path(_) => {
+            path_count += 1;
+            path_count <= MAX_RECENT_REPOS
+        }
+        RepoEntry::Group { .. } => true,
+    });
+
+    save_repo_entries(&entries);
+
+    // 互換性のため、フラットなリストを返す
+    entries
+        .iter()
+        .flat_map(|entry| match entry {
+            RepoEntry::Path(p) => vec![p.clone()],
+            RepoEntry::Group { repos, .. } => repos.clone(),
+        })
+        .collect()
 }
 
 /// リポジトリを一覧から削除
@@ -289,6 +335,340 @@ fn reorder_recent_repos(from_idx: usize, to_idx: usize) -> Vec<String> {
         save_recent_repos(&repos);
     }
     repos
+}
+
+// ============================================================================
+// リポジトリグループ機能
+// ============================================================================
+
+/// リポジトリエントリ（単独リポジトリまたはグループ）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum RepoEntry {
+    /// グループ
+    Group {
+        #[serde(rename = "type")]
+        entry_type: String,
+        name: String,
+        #[serde(default)]
+        collapsed: bool,
+        repos: Vec<String>,
+    },
+    /// 単独リポジトリ
+    Path(String),
+}
+
+impl RepoEntry {
+    fn new_group(name: &str) -> Self {
+        RepoEntry::Group {
+            entry_type: "group".to_string(),
+            name: name.to_string(),
+            collapsed: false,
+            repos: Vec::new(),
+        }
+    }
+}
+
+/// UI表示用のフラット化されたリストアイテム
+#[derive(Debug, Clone)]
+struct RepoListItem {
+    is_group: bool,
+    group_name: String,
+    group_collapsed: bool,
+    group_repo_count: i32,
+    repo_path: String,
+    indent_level: i32,
+    original_index: i32, // 元のエントリ配列でのインデックス
+    index_in_group: i32, // グループ内でのインデックス（グループ内のリポジトリの場合）
+}
+
+/// 設定ファイルからリポジトリエントリを読み込み（後方互換性あり）
+fn load_repo_entries() -> Vec<RepoEntry> {
+    let path = get_config_path();
+    if let Ok(content) = fs::read_to_string(&path) {
+        // まず新フォーマット（RepoEntry配列）として解析を試みる
+        if let Ok(entries) = serde_json::from_str::<Vec<RepoEntry>>(&content) {
+            return entries;
+        }
+        // 失敗した場合、旧フォーマット（文字列配列）として解析
+        if let Ok(paths) = serde_json::from_str::<Vec<String>>(&content) {
+            return paths.into_iter().map(RepoEntry::Path).collect();
+        }
+    }
+    Vec::new()
+}
+
+/// リポジトリエントリを設定ファイルに保存
+fn save_repo_entries(entries: &[RepoEntry]) {
+    let path = get_config_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(entries) {
+        let _ = fs::write(&path, json);
+    }
+}
+
+/// エントリをUI表示用にフラット化
+fn flatten_repo_entries(entries: &[RepoEntry]) -> Vec<RepoListItem> {
+    let mut items = Vec::new();
+
+    for (idx, entry) in entries.iter().enumerate() {
+        match entry {
+            RepoEntry::Group {
+                name,
+                collapsed,
+                repos,
+                ..
+            } => {
+                // グループヘッダー
+                items.push(RepoListItem {
+                    is_group: true,
+                    group_name: name.clone(),
+                    group_collapsed: *collapsed,
+                    group_repo_count: repos.len() as i32,
+                    repo_path: String::new(),
+                    indent_level: 0,
+                    original_index: idx as i32,
+                    index_in_group: -1,
+                });
+
+                // 折りたたまれていなければグループ内のリポジトリも追加
+                if !collapsed {
+                    for (repo_idx, repo_path) in repos.iter().enumerate() {
+                        items.push(RepoListItem {
+                            is_group: false,
+                            group_name: name.clone(),
+                            group_collapsed: false,
+                            group_repo_count: 0,
+                            repo_path: repo_path.clone(),
+                            indent_level: 1,
+                            original_index: idx as i32,
+                            index_in_group: repo_idx as i32,
+                        });
+                    }
+                }
+            }
+            RepoEntry::Path(path) => {
+                // 単独リポジトリ
+                items.push(RepoListItem {
+                    is_group: false,
+                    group_name: String::new(),
+                    group_collapsed: false,
+                    group_repo_count: 0,
+                    repo_path: path.clone(),
+                    indent_level: 0,
+                    original_index: idx as i32,
+                    index_in_group: -1,
+                });
+            }
+        }
+    }
+
+    items
+}
+
+/// 新しいグループを作成
+fn create_repo_group(name: &str) -> Vec<RepoEntry> {
+    let mut entries = load_repo_entries();
+    entries.push(RepoEntry::new_group(name));
+    save_repo_entries(&entries);
+    entries
+}
+
+/// グループの展開/折りたたみを切り替え
+fn toggle_group_collapsed(index: usize) -> Vec<RepoEntry> {
+    let mut entries = load_repo_entries();
+    if let Some(RepoEntry::Group { collapsed, .. }) = entries.get_mut(index) {
+        *collapsed = !*collapsed;
+        save_repo_entries(&entries);
+    }
+    entries
+}
+
+/// グループを削除（中のリポジトリも削除）
+fn delete_repo_group(index: usize) -> Vec<RepoEntry> {
+    let mut entries = load_repo_entries();
+    if index < entries.len() {
+        if let RepoEntry::Group { .. } = &entries[index] {
+            entries.remove(index);
+            save_repo_entries(&entries);
+        }
+    }
+    entries
+}
+
+/// リポジトリをグループに移動
+fn move_repo_to_group(item_index: usize, target_group_index: usize) -> Vec<RepoEntry> {
+    let mut entries = load_repo_entries();
+    let items = flatten_repo_entries(&entries);
+
+    if item_index >= items.len() {
+        return entries;
+    }
+
+    let item = &items[item_index];
+    if item.is_group {
+        return entries; // グループは移動対象外
+    }
+
+    let repo_path = item.repo_path.clone();
+    let source_entry_idx = item.original_index as usize;
+    let source_in_group_idx = item.index_in_group;
+
+    // ソースからリポジトリを削除
+    if source_in_group_idx >= 0 {
+        // グループ内のリポジトリ
+        if let Some(RepoEntry::Group { repos, .. }) = entries.get_mut(source_entry_idx) {
+            repos.remove(source_in_group_idx as usize);
+        }
+    } else {
+        // トップレベルのリポジトリ
+        entries.remove(source_entry_idx);
+    }
+
+    // ターゲットグループに追加
+    // (削除後にインデックスがずれている可能性があるため、再取得)
+    let entries_len = entries.len();
+    let adjusted_target = if source_in_group_idx < 0 && source_entry_idx < target_group_index {
+        target_group_index.saturating_sub(1)
+    } else {
+        target_group_index
+    };
+
+    if adjusted_target < entries_len {
+        if let Some(RepoEntry::Group { repos, .. }) = entries.get_mut(adjusted_target) {
+            repos.push(repo_path);
+        }
+    }
+
+    save_repo_entries(&entries);
+    entries
+}
+
+/// リポジトリをグループから外す（トップレベルの末尾に移動）
+fn remove_repo_from_group(item_index: usize) -> Vec<RepoEntry> {
+    let mut entries = load_repo_entries();
+    let items = flatten_repo_entries(&entries);
+
+    if item_index >= items.len() {
+        return entries;
+    }
+
+    let item = &items[item_index];
+    if item.is_group || item.index_in_group < 0 {
+        return entries; // グループまたは既にトップレベルの場合は何もしない
+    }
+
+    let repo_path = item.repo_path.clone();
+    let group_idx = item.original_index as usize;
+    let in_group_idx = item.index_in_group as usize;
+
+    // グループからリポジトリを削除
+    if let Some(RepoEntry::Group { repos, .. }) = entries.get_mut(group_idx) {
+        repos.remove(in_group_idx);
+    }
+
+    // トップレベルの末尾に追加
+    entries.push(RepoEntry::Path(repo_path));
+
+    save_repo_entries(&entries);
+    entries
+}
+
+/// エントリの並び替え（グループまたはトップレベルリポジトリ）
+fn reorder_repo_entries(from_idx: usize, to_idx: usize) -> Vec<RepoEntry> {
+    let mut entries = load_repo_entries();
+    if from_idx < entries.len() && to_idx <= entries.len() && from_idx != to_idx {
+        let item = entries.remove(from_idx);
+        let insert_idx = if to_idx > from_idx {
+            to_idx - 1
+        } else {
+            to_idx
+        };
+        entries.insert(insert_idx.min(entries.len()), item);
+        save_repo_entries(&entries);
+    }
+    entries
+}
+
+/// リポジトリをグループから外して特定のエントリ位置に挿入
+fn move_repo_to_position(item_index: usize, target_entry_index: usize) -> Vec<RepoEntry> {
+    let mut entries = load_repo_entries();
+    let items = flatten_repo_entries(&entries);
+
+    if item_index >= items.len() {
+        return entries;
+    }
+
+    let item = &items[item_index];
+    if item.is_group {
+        return entries; // グループは移動対象外
+    }
+
+    let repo_path = item.repo_path.clone();
+    let source_entry_idx = item.original_index as usize;
+    let source_in_group_idx = item.index_in_group;
+
+    // ソースからリポジトリを削除
+    if source_in_group_idx >= 0 {
+        // グループ内のリポジトリ
+        if let Some(RepoEntry::Group { repos, .. }) = entries.get_mut(source_entry_idx) {
+            repos.remove(source_in_group_idx as usize);
+        }
+    } else {
+        // トップレベルのリポジトリ
+        entries.remove(source_entry_idx);
+    }
+
+    // ターゲット位置に挿入（削除後のインデックス調整）
+    let adjusted_target = if source_in_group_idx < 0 && source_entry_idx < target_entry_index {
+        target_entry_index.saturating_sub(1)
+    } else {
+        target_entry_index
+    };
+
+    entries.insert(
+        adjusted_target.min(entries.len()),
+        RepoEntry::Path(repo_path),
+    );
+
+    save_repo_entries(&entries);
+    entries
+}
+
+/// UIのリポジトリリストを更新
+fn update_repo_list_ui(ui: &MainWindow, entries: &[RepoEntry]) {
+    let items = flatten_repo_entries(entries);
+
+    let ui_items: Vec<RepoListItemData> = items
+        .iter()
+        .map(|item| RepoListItemData {
+            is_group: item.is_group,
+            group_name: SharedString::from(&item.group_name),
+            group_collapsed: item.group_collapsed,
+            group_repo_count: item.group_repo_count,
+            repo_path: SharedString::from(&item.repo_path),
+            indent_level: item.indent_level,
+            original_index: item.original_index,
+            index_in_group: item.index_in_group,
+        })
+        .collect();
+
+    ui.set_repo_list_items(ModelRc::new(VecModel::from(ui_items)));
+
+    // 既存のrecent-reposも更新（互換性のため）
+    let recent_repos: Vec<SharedString> = entries
+        .iter()
+        .flat_map(|entry| match entry {
+            RepoEntry::Path(path) => vec![SharedString::from(path.as_str())],
+            RepoEntry::Group { repos, .. } => repos
+                .iter()
+                .map(|p| SharedString::from(p.as_str()))
+                .collect(),
+        })
+        .collect();
+    ui.set_recent_repos(ModelRc::new(VecModel::from(recent_repos)));
 }
 
 // クリップボードにテキストをコピー（クロスプラットフォーム対応・非同期）
@@ -2183,7 +2563,8 @@ impl GitClient {
 
 fn main() -> Result<(), slint::PlatformError> {
     let ui = MainWindow::new()?;
-    ui.window().set_size(slint::LogicalSize::new(1600.0, 1000.0));
+    ui.window()
+        .set_size(slint::LogicalSize::new(1600.0, 1000.0));
     let git_client = Rc::new(RefCell::new(GitClient::new()));
 
     // コミットメッセージ履歴を読み込み（最大10件保持）
@@ -2328,6 +2709,94 @@ fn main() -> Result<(), slint::PlatformError> {
                     .map(|s| SharedString::from(s.as_str()))
                     .collect();
                 ui.set_recent_repos(ModelRc::new(VecModel::from(recent_model)));
+            }
+        });
+    }
+
+    // グループ作成
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_create_group(move |name| {
+            let entries = create_repo_group(&name);
+            if let Some(ui) = ui_weak.upgrade() {
+                update_repo_list_ui(&ui, &entries);
+            }
+        });
+    }
+
+    // グループ展開/折りたたみ
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_toggle_group(move |original_index| {
+            let entries = toggle_group_collapsed(original_index as usize);
+            if let Some(ui) = ui_weak.upgrade() {
+                update_repo_list_ui(&ui, &entries);
+            }
+        });
+    }
+
+    // グループ削除
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_delete_group(move |original_index| {
+            let entries = delete_repo_group(original_index as usize);
+            if let Some(ui) = ui_weak.upgrade() {
+                update_repo_list_ui(&ui, &entries);
+            }
+        });
+    }
+
+    // リポジトリをグループに移動
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_move_repo_to_group(move |item_index, target_group_index| {
+            let entries = move_repo_to_group(item_index as usize, target_group_index as usize);
+            if let Some(ui) = ui_weak.upgrade() {
+                update_repo_list_ui(&ui, &entries);
+            }
+        });
+    }
+
+    // リポジトリをグループから外す
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_remove_repo_from_group(move |item_index| {
+            let entries = remove_repo_from_group(item_index as usize);
+            if let Some(ui) = ui_weak.upgrade() {
+                update_repo_list_ui(&ui, &entries);
+            }
+        });
+    }
+
+    // エントリの並び替え
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_reorder_entries(move |from_idx, to_idx| {
+            let entries = reorder_repo_entries(from_idx as usize, to_idx as usize);
+            if let Some(ui) = ui_weak.upgrade() {
+                update_repo_list_ui(&ui, &entries);
+            }
+        });
+    }
+
+    // リポジトリを特定位置に移動
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_move_repo_to_position(move |item_index, target_entry_index| {
+            let entries = move_repo_to_position(item_index as usize, target_entry_index as usize);
+            if let Some(ui) = ui_weak.upgrade() {
+                update_repo_list_ui(&ui, &entries);
+            }
+        });
+    }
+
+    // リポジトリリストの再読み込み
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_refresh_repo_list(move || {
+            let entries = load_repo_entries();
+            if let Some(ui) = ui_weak.upgrade() {
+                update_repo_list_ui(&ui, &entries);
             }
         });
     }

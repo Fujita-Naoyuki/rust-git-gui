@@ -17,6 +17,17 @@ export struct DiffLineData { content: string, line-type: string, old-line-num: i
 export struct DiffFileData { filename: string, status: string }
 // マージ線用のデータ構造
 export struct MergeLineData { from-row: int, from-col: int, to-row: int, to-col: int, color-idx: int }
+// リポジトリリストアイテム（グループ対応）
+export struct RepoListItemData { 
+    is-group: bool,
+    group-name: string,
+    group-collapsed: bool,
+    group-repo-count: int,
+    repo-path: string,
+    indent-level: int,
+    original-index: int,
+    index-in-group: int
+}
 
 // Git Graph用のコミットアイテム - SVGパスベースの描画（色分け対応）
 
@@ -476,9 +487,29 @@ export component MainWindow inherits Window {
     in-out property <int> pressed-repo-index: -1;   // マウス押下中のインデックス
     in-out property <int> dragging-repo-index: -1;  // 実際にドラッグ中のインデックス（移動後に設定）
     in-out property <int> drag-target-index: -1;
+    // ドロップゾーン: 0=上端（前に挿入）, 1=中心（グループに追加）, 2=下端（後に挿入）
+    in-out property <int> drag-drop-zone: 1;
     
     callback remove-repo(int);
     callback reorder-repos(int, int);
+    
+    // リポジトリグループ機能
+    in-out property <[RepoListItemData]> repo-list-items: [];  // フラット化されたリストアイテム
+    in-out property <bool> show-create-group-dialog: false;
+    in-out property <string> new-group-name: "";
+    in-out property <bool> show-delete-group-confirm: false;
+    in-out property <int> delete-group-index: -1;
+    in-out property <string> delete-group-name: "";
+    in-out property <int> delete-group-repo-count: 0;
+    
+    callback create-group(string);
+    callback toggle-group(int);          // original_index
+    callback delete-group(int);          // original_index
+    callback move-repo-to-group(int, int);  // item_index, target_group_index
+    callback remove-repo-from-group(int);   // item_index
+    callback reorder-entries(int, int);     // from_entry_idx, to_entry_idx
+    callback move-repo-to-position(int, int); // item_index, target_entry_index
+    callback refresh-repo-list();
     
     // Stash Context Menu
     in-out property <bool> show-stash-context-menu: false;
@@ -593,7 +624,12 @@ export component MainWindow inherits Window {
                 Button { 
                     text: show-repo-sidebar ? "📂" : "📁"; 
                     width: 40px;
-                    clicked => { show-repo-sidebar = !show-repo-sidebar; }
+                    clicked => { 
+                        if !show-repo-sidebar {
+                            refresh-repo-list();
+                        }
+                        show-repo-sidebar = !show-repo-sidebar; 
+                    }
                 }
                 Text {
                     text: repo-name != "" ? repo-name : "Select Repository";
@@ -1488,6 +1524,28 @@ export component MainWindow inherits Window {
                 HorizontalBox { height: 32px; padding-left: 8px;
                     Text { text: "Repositories"; font-size: 14px; font-weight: 600; color: #c9d1d9; vertical-alignment: center; }
                     Rectangle { horizontal-stretch: 1; }
+                    // グループ作成ボタン
+                    Rectangle {
+                        width: 32px;
+                        border-radius: 4px;
+                        background: add-group-btn-ta.has-hover ? #3c3c3c : transparent;
+                        
+                        Text { 
+                            text: "📁+"; 
+                            font-size: 14px; 
+                            color: #c9d1d9; 
+                            horizontal-alignment: center; 
+                            vertical-alignment: center;
+                        }
+                        
+                        add-group-btn-ta := TouchArea {
+                            clicked => { 
+                                new-group-name = "";
+                                show-create-group-dialog = true; 
+                            }
+                        }
+                    }
+                    // 閉じるボタン
                     Rectangle {
                         width: 32px;
                         border-radius: 4px;
@@ -1511,79 +1569,147 @@ export component MainWindow inherits Window {
 
                 Rectangle { vertical-stretch: 1; background: #1e1e1e; border-radius: 4px;
                     ScrollView { VerticalBox { alignment: start;
-                        for repo[idx] in recent-repos: Rectangle {
+                        for item[idx] in repo-list-items: Rectangle {
+                            // ドロップゾーン判定
+                            // zone 0=上端（前に挿入）, 1=中心（グループに追加）, 2=下端（後に挿入）
+                            property <bool> is-current-drop-target: dragging-repo-index >= 0 && drag-target-index == idx && dragging-repo-index != idx;
+                            property <bool> is-drop-to-group: is-current-drop-target && item.is-group && drag-drop-zone == 1;
+                            property <bool> is-drop-before: is-current-drop-target && drag-drop-zone == 0;
+                            property <bool> is-drop-after: is-current-drop-target && drag-drop-zone == 2;
+                            
                             height: 32px;
                             background: dragging-repo-index == idx ? #3584e480 : 
-                                        (repo-path == repo ? #3584e4 : 
-                                        (repo-ta.has-hover || delete-btn-ta.has-hover ? #2a2d2e : transparent));
+                                        (is-drop-to-group ? #3584e440 :  // グループ中心にドロップ時はハイライト
+                                        (item.is-group ? (item-ta.has-hover ? #2a2d2e : #252526) :
+                                        (repo-path == item.repo-path ? #3584e4 : 
+                                        (item-ta.has-hover || delete-btn-ta.has-hover ? #2a2d2e : transparent))));
                             
-                            // ドロップ位置インジケーター（上部）
-                            if drag-target-index == idx && dragging-repo-index != idx && dragging-repo-index >= 0: Rectangle {
+                            // ドロップ位置インジケーター（上端）
+                            if is-drop-before: Rectangle {
                                 x: 0; y: -1px;
                                 width: 100%; height: 2px;
                                 background: #3584e4;
                             }
                             
-                            repo-ta := TouchArea { 
+                            // ドロップ位置インジケーター（下端）
+                            if is-drop-after: Rectangle {
+                                x: 0; y: parent.height - 1px;
+                                width: 100%; height: 2px;
+                                background: #3584e4;
+                            }
+                            
+                            item-ta := TouchArea { 
                                 mouse-cursor: dragging-repo-index >= 0 ? grabbing : pointer;
                                 
                                 pointer-event(event) => {
                                     if event.button == PointerEventButton.left {
                                         if event.kind == PointerEventKind.down {
-                                            // マウス押下開始（まだドラッグではない）
-                                            pressed-repo-index = idx;
+                                            // リポジトリのみドラッグ対象（グループはクリックのみ）
+                                            if !item.is-group {
+                                                pressed-repo-index = idx;
+                                            }
                                         } else if event.kind == PointerEventKind.up {
-                                            if dragging-repo-index >= 0 {
-                                                // ドラッグ中だった場合：ドロップ処理
-                                                if drag-target-index >= 0 && dragging-repo-index != drag-target-index {
-                                                    reorder-repos(dragging-repo-index, drag-target-index);
+                                            if item.is-group && dragging-repo-index < 0 {
+                                                // グループのクリック → 展開/折りたたみ
+                                                toggle-group(item.original-index);
+                                            } else if dragging-repo-index >= 0 && drag-target-index >= 0 && dragging-repo-index != drag-target-index {
+                                                // ドラッグ終了処理
+                                                if drag-target-index < repo-list-items.length {
+                                                    if repo-list-items[drag-target-index].is-group && drag-drop-zone == 1 {
+                                                        // グループの中心にドロップ → グループに追加
+                                                        move-repo-to-group(dragging-repo-index, repo-list-items[drag-target-index].original-index);
+                                                    } else if repo-list-items[drag-target-index].indent-level > 0 {
+                                                        // グループ内のリポジトリにドロップ → そのグループに追加（ドロップゾーンに関わらず）
+                                                        move-repo-to-group(dragging-repo-index, repo-list-items[drag-target-index].original-index);
+                                                    } else if drag-drop-zone == 0 {
+                                                        // 上端にドロップ → その位置の前に挿入
+                                                        move-repo-to-position(dragging-repo-index, repo-list-items[drag-target-index].original-index);
+                                                    } else if drag-drop-zone == 2 {
+                                                        // 下端にドロップ → その位置の後に挿入
+                                                        move-repo-to-position(dragging-repo-index, repo-list-items[drag-target-index].original-index + 1);
+                                                    } else {
+                                                        // トップレベルのリポジトリにドロップ → その位置に挿入
+                                                        move-repo-to-position(dragging-repo-index, repo-list-items[drag-target-index].original-index);
+                                                    }
+                                                } else {
+                                                    // リスト末尾にドロップ → 末尾に移動
+                                                    move-repo-to-position(dragging-repo-index, 9999);
                                                 }
                                             } else if pressed-repo-index == idx {
-                                                // ドラッグせずにリリース = クリック
-                                                repo-path = repo; 
-                                                open-repo(repo); 
+                                                // リポジトリのクリック → 開く
+                                                repo-path = item.repo-path; 
+                                                open-repo(item.repo-path); 
                                                 show-repo-sidebar = false;
                                             }
-                                            // 状態をリセット
                                             pressed-repo-index = -1;
                                             dragging-repo-index = -1;
                                             drag-target-index = -1;
+                                            drag-drop-zone = 1;
                                         }
                                     }
                                 }
                                 
                                 moved => {
-                                    // マウスが移動した場合、ドラッグ開始
                                     if pressed-repo-index >= 0 && dragging-repo-index < 0 {
                                         dragging-repo-index = pressed-repo-index;
                                     }
                                     if dragging-repo-index >= 0 {
-                                        // マウスY座標からドロップ先インデックスを計算
-                                        // self.mouse-y は現在のアイテム内の相対座標
-                                        // 現在位置 = idx * 32px + self.mouse-y
-                                        drag-target-index = clamp(floor((idx * 32px + self.mouse-y) / 32px), 0, recent-repos.length);
+                                        // 絶対Y座標
+                                        drag-target-index = clamp(floor((idx * 32px + self.mouse-y) / 32px), 0, repo-list-items.length);
+                                        // ターゲットアイテム内の相対Y座標を計算
+                                        // target_y = abs_y - target_index * 32px
+                                        // abs_y = idx * 32px + self.mouse-y
+                                        // target_y = idx * 32px + self.mouse-y - drag_target_index * 32px
+                                        //          = (idx - drag_target_index) * 32px + self.mouse-y
+                                        // しかし、movedイベントは各アイテムのTouchAreaで発火するので
+                                        // self.mouse-y は現在のアイテム(idx)内の座標
+                                        // マウスが現在のアイテム内にある場合のみ正確
+                                        // 簡易的に、mod計算でターゲット内座標を取得
+                                        if drag-target-index < repo-list-items.length {
+                                            // mod計算でターゲットアイテム内のY座標を推定
+                                            // 0-8px: 上端(0), 8-24px: 中心(1), 24-32px: 下端(2)
+                                            if mod(idx * 32px + self.mouse-y, 32px) < 8px {
+                                                drag-drop-zone = 0;
+                                            } else if mod(idx * 32px + self.mouse-y, 32px) > 24px {
+                                                drag-drop-zone = 2;
+                                            } else {
+                                                drag-drop-zone = 1;
+                                            }
+                                        }
                                     }
                                 }
                             }
                             
-                            HorizontalBox { padding: 4px; spacing: 8px;
-                                // ドラッグハンドル
-                                Text { 
-                                    text: "≡"; 
-                                    font-size: 14px; 
-                                    color: #666; 
+                            HorizontalBox { padding: 4px; spacing: 4px;
+                                // インデント
+                                if item.indent-level > 0: Rectangle { width: 16px; }
+                                
+                                // アイコン
+                                if item.is-group: Text { 
+                                    text: item.group-collapsed ? "▶" : "▼"; 
+                                    font-size: 12px; 
+                                    color: #888; 
                                     vertical-alignment: center; 
                                     width: 16px;
                                 }
-                                Text { text: "📁"; font-size: 14px; vertical-alignment: center; width: 16px; color: #c9d1d9; }
                                 Text { 
-                                    text: repo; 
+                                    text: item.is-group ? "📁" : "📄"; 
+                                    font-size: 14px; 
+                                    vertical-alignment: center; 
+                                    width: 16px; 
+                                }
+                                
+                                // テキスト
+                                Text { 
+                                    text: item.is-group ? item.group-name + " (" + item.group-repo-count + ")" : item.repo-path; 
                                     font-size: 13px; 
-                                    color: repo-path == repo ? white : #c9d1d9; 
+                                    font-weight: item.is-group ? 600 : 400;
+                                    color: item.is-group ? #c9d1d9 : (repo-path == item.repo-path ? white : #c9d1d9); 
                                     vertical-alignment: center; 
                                     overflow: elide;
                                     horizontal-stretch: 1;
                                 }
+                                
                                 // 削除ボタン
                                 Rectangle {
                                     width: 24px;
@@ -1601,30 +1727,34 @@ export component MainWindow inherits Window {
                                     
                                     delete-btn-ta := TouchArea {
                                         clicked => {
-                                            delete-repo-index = idx;
-                                            delete-repo-path = repo;
-                                            show-delete-repo-confirm = true;
+                                            if item.is-group {
+                                                delete-group-index = item.original-index;
+                                                delete-group-name = item.group-name;
+                                                delete-group-repo-count = item.group-repo-count;
+                                                show-delete-group-confirm = true;
+                                            } else {
+                                                delete-repo-index = idx;
+                                                delete-repo-path = item.repo-path;
+                                                show-delete-repo-confirm = true;
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
                         // 最後尾へのドロップインジケーター
-                        if drag-target-index >= recent-repos.length && dragging-repo-index >= 0: Rectangle {
+                        if drag-target-index >= repo-list-items.length && dragging-repo-index >= 0: Rectangle {
                             height: 2px;
                             background: #3584e4;
                         }
                     } }
                     
-                    // リスト全体のドラッグ追跡（アイテム間の隙間でも追跡）
+                    // リスト全体のドラッグ追跡
                     TouchArea {
                         enabled: dragging-repo-index >= 0;
                         
                         pointer-event(event) => {
                             if event.button == PointerEventButton.left && event.kind == PointerEventKind.up {
-                                if dragging-repo-index >= 0 && drag-target-index >= 0 && dragging-repo-index != drag-target-index {
-                                    reorder-repos(dragging-repo-index, drag-target-index);
-                                }
                                 pressed-repo-index = -1;
                                 dragging-repo-index = -1;
                                 drag-target-index = -1;
@@ -1636,8 +1766,7 @@ export component MainWindow inherits Window {
                                 dragging-repo-index = pressed-repo-index;
                             }
                             if dragging-repo-index >= 0 {
-                                // Y座標からインデックスを計算
-                                drag-target-index = clamp(floor(self.mouse-y / 32px), 0, recent-repos.length);
+                                drag-target-index = clamp(floor(self.mouse-y / 32px), 0, repo-list-items.length);
                             }
                         }
                     }
@@ -1830,7 +1959,131 @@ export component MainWindow inherits Window {
         }
     }
 
-    // Stash Context Menu
+    // Create Group Dialog
+    if show-create-group-dialog: Rectangle {
+        width: 100%; height: 100%;
+        background: #00000080;
+        z: 300;
+
+        TouchArea {
+            clicked => { show-create-group-dialog = false; }
+        }
+
+        Rectangle {
+            width: 400px;
+            height: 180px;
+            background: #252526;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #444;
+            
+            TouchArea {}
+
+            VerticalBox {
+                padding: 16px;
+                spacing: 12px;
+
+                Text { 
+                    text: "Create New Group"; 
+                    font-size: 18px; 
+                    font-weight: 600; 
+                    color: #c9d1d9; 
+                }
+
+                ModalLineEdit {
+                    placeholder-text: "Group name";
+                    text <=> new-group-name;
+                }
+
+                Rectangle { vertical-stretch: 1; }
+
+                HorizontalBox { spacing: 12px; alignment: end;
+                    ModalButton {
+                        text: "Cancel";
+                        clicked => { show-create-group-dialog = false; }
+                    }
+                    ModalButton {
+                        text: "Create";
+                        primary: true;
+                        clicked => {
+                            if new-group-name != "" {
+                                create-group(new-group-name);
+                                show-create-group-dialog = false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Delete Group Confirmation Dialog
+    if show-delete-group-confirm: Rectangle {
+        width: 100%; height: 100%;
+        background: #00000080;
+        z: 300;
+
+        TouchArea {
+            clicked => { show-delete-group-confirm = false; }
+        }
+
+        Rectangle {
+            width: 400px;
+            height: 240px;
+            background: #252526;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #444;
+            
+            TouchArea {}
+
+            VerticalBox {
+                padding: 16px;
+                spacing: 12px;
+
+                Text { 
+                    text: "Delete Group"; 
+                    font-size: 18px; 
+                    font-weight: 600; 
+                    color: #e01b24; 
+                }
+
+                Text { 
+                    text: "Are you sure you want to delete this group?\nAll repositories in the group will also be removed from the list."; 
+                    font-size: 14px; 
+                    color: #8b949e;
+                    wrap: word-wrap;
+                }
+
+                HorizontalBox { spacing: 8px;
+                    Text { text: "📁"; font-size: 16px; vertical-alignment: center; }
+                    Text { 
+                        text: delete-group-name + " (" + delete-group-repo-count + " repositories)"; 
+                        font-size: 14px; 
+                        color: #c9d1d9;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle { vertical-stretch: 1; }
+
+                HorizontalBox { spacing: 12px; alignment: end;
+                    ModalButton {
+                        text: "Cancel";
+                        clicked => { show-delete-group-confirm = false; }
+                    }
+                    ModalButton {
+                        text: "Delete Group";
+                        primary: true;
+                        clicked => {
+                            delete-group(delete-group-index);
+                            show-delete-group-confirm = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
     if show-stash-context-menu: Rectangle {
         width: 100%; height: 100%; z: 200;
         TouchArea { clicked => { show-stash-context-menu = false; } }
