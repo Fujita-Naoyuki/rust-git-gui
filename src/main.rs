@@ -546,6 +546,58 @@ fn move_repo_to_group(item_index: usize, target_group_index: usize) -> Vec<RepoE
     entries
 }
 
+/// リポジトリをグループの指定位置に移動
+fn move_repo_to_group_at_position(
+    item_index: usize,
+    target_group_index: usize,
+    position: usize,
+) -> Vec<RepoEntry> {
+    let mut entries = load_repo_entries();
+    let items = flatten_repo_entries(&entries);
+
+    if item_index >= items.len() {
+        return entries;
+    }
+
+    let item = &items[item_index];
+    if item.is_group {
+        return entries; // グループは移動対象外
+    }
+
+    let repo_path = item.repo_path.clone();
+    let source_entry_idx = item.original_index as usize;
+    let source_in_group_idx = item.index_in_group;
+
+    // ソースからリポジトリを削除
+    if source_in_group_idx >= 0 {
+        // グループ内のリポジトリ
+        if let Some(RepoEntry::Group { repos, .. }) = entries.get_mut(source_entry_idx) {
+            repos.remove(source_in_group_idx as usize);
+        }
+    } else {
+        // トップレベルのリポジトリ
+        entries.remove(source_entry_idx);
+    }
+
+    // ターゲットグループの指定位置に挿入
+    let entries_len = entries.len();
+    let adjusted_target = if source_in_group_idx < 0 && source_entry_idx < target_group_index {
+        target_group_index.saturating_sub(1)
+    } else {
+        target_group_index
+    };
+
+    if adjusted_target < entries_len {
+        if let Some(RepoEntry::Group { repos, .. }) = entries.get_mut(adjusted_target) {
+            let insert_pos = position.min(repos.len());
+            repos.insert(insert_pos, repo_path);
+        }
+    }
+
+    save_repo_entries(&entries);
+    entries
+}
+
 /// リポジトリをグループから外す（トップレベルの末尾に移動）
 fn remove_repo_from_group(item_index: usize) -> Vec<RepoEntry> {
     let mut entries = load_repo_entries();
@@ -2751,6 +2803,21 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui.as_weak();
         ui.on_move_repo_to_group(move |item_index, target_group_index| {
             let entries = move_repo_to_group(item_index as usize, target_group_index as usize);
+            if let Some(ui) = ui_weak.upgrade() {
+                update_repo_list_ui(&ui, &entries);
+            }
+        });
+    }
+
+    // リポジトリをグループの指定位置に移動
+    {
+        let ui_weak = ui.as_weak();
+        ui.on_move_repo_to_group_at_position(move |item_index, target_group_index, position| {
+            let entries = move_repo_to_group_at_position(
+                item_index as usize,
+                target_group_index as usize,
+                position as usize,
+            );
             if let Some(ui) = ui_weak.upgrade() {
                 update_repo_list_ui(&ui, &entries);
             }

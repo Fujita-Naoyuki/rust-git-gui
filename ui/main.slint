@@ -506,6 +506,7 @@ export component MainWindow inherits Window {
     callback toggle-group(int);          // original_index
     callback delete-group(int);          // original_index
     callback move-repo-to-group(int, int);  // item_index, target_group_index
+    callback move-repo-to-group-at-position(int, int, int); // item_index, target_group_index, position
     callback remove-repo-from-group(int);   // item_index
     callback reorder-entries(int, int);     // from_entry_idx, to_entry_idx
     callback move-repo-to-position(int, int); // item_index, target_entry_index
@@ -1571,15 +1572,15 @@ export component MainWindow inherits Window {
                     ScrollView { VerticalBox { alignment: start;
                         for item[idx] in repo-list-items: Rectangle {
                             // ドロップゾーン判定
-                            // zone 0=上端（前に挿入）, 1=中心（グループに追加）, 2=下端（後に挿入）
+                            // zone 0=上端（前に挿入）, 1=中心（グループに追加）, 2=下端（後に挿入/グループ追加）
                             property <bool> is-current-drop-target: dragging-repo-index >= 0 && drag-target-index == idx && dragging-repo-index != idx;
-                            property <bool> is-drop-to-group: is-current-drop-target && item.is-group && drag-drop-zone == 1;
+                            property <bool> is-drop-to-group: is-current-drop-target && item.is-group && (drag-drop-zone == 1 || drag-drop-zone == 2);
                             property <bool> is-drop-before: is-current-drop-target && drag-drop-zone == 0;
-                            property <bool> is-drop-after: is-current-drop-target && drag-drop-zone == 2;
+                            property <bool> is-drop-after: is-current-drop-target && drag-drop-zone == 2 && !item.is-group;
                             
                             height: 32px;
                             background: dragging-repo-index == idx ? #3584e480 : 
-                                        (is-drop-to-group ? #3584e440 :  // グループ中心にドロップ時はハイライト
+                                        (is-drop-to-group ? #3584e440 :  // グループにドロップ時はハイライト
                                         (item.is-group ? (item-ta.has-hover ? #2a2d2e : #252526) :
                                         (repo-path == item.repo-path ? #3584e4 : 
                                         (item-ta.has-hover || delete-btn-ta.has-hover ? #2a2d2e : transparent))));
@@ -1591,7 +1592,7 @@ export component MainWindow inherits Window {
                                 background: #3584e4;
                             }
                             
-                            // ドロップ位置インジケーター（下端）
+                            // ドロップ位置インジケーター（下端）- グループ以外のみ
                             if is-drop-after: Rectangle {
                                 x: 0; y: parent.height - 1px;
                                 width: 100%; height: 2px;
@@ -1615,9 +1616,15 @@ export component MainWindow inherits Window {
                                             } else if dragging-repo-index >= 0 && drag-target-index >= 0 && dragging-repo-index != drag-target-index {
                                                 // ドラッグ終了処理
                                                 if drag-target-index < repo-list-items.length {
-                                                    if repo-list-items[drag-target-index].is-group && drag-drop-zone == 1 {
-                                                        // グループの中心にドロップ → グループに追加
+                                                    if repo-list-items[drag-target-index].is-group && drag-drop-zone == 2 {
+                                                        // グループの下端にドロップ → グループの先頭に挿入
+                                                        move-repo-to-group-at-position(dragging-repo-index, repo-list-items[drag-target-index].original-index, 0);
+                                                    } else if repo-list-items[drag-target-index].is-group && drag-drop-zone == 1 {
+                                                        // グループの中心にドロップ → グループの末尾に追加
                                                         move-repo-to-group(dragging-repo-index, repo-list-items[drag-target-index].original-index);
+                                                    } else if repo-list-items[drag-target-index].indent-level > 0 && repo-list-items[drag-target-index].index-in-group == 0 && drag-drop-zone == 0 {
+                                                        // グループ内の最初のアイテムの上端にドロップ → グループの先頭に挿入
+                                                        move-repo-to-group-at-position(dragging-repo-index, repo-list-items[drag-target-index].original-index, 0);
                                                     } else if repo-list-items[drag-target-index].indent-level > 0 {
                                                         // グループ内のリポジトリにドロップ → そのグループに追加（ドロップゾーンに関わらず）
                                                         move-repo-to-group(dragging-repo-index, repo-list-items[drag-target-index].original-index);
