@@ -24,6 +24,7 @@ export struct RepoListItemData {
     group-collapsed: bool,
     group-repo-count: int,
     repo-path: string,
+    repo-name: string,  // リポジトリ名（ディレクトリ名）
     indent-level: int,
     original-index: int,
     index-in-group: int
@@ -477,7 +478,7 @@ export component MainWindow inherits Window {
     
     // Repository Sidebar Properties
     in-out property <bool> show-repo-sidebar: false;
-    in-out property <length> repo-sidebar-width: 300px;
+    in-out property <length> repo-sidebar-width: 600px;
     in-out property <string> repo-name: "";
     // リポジトリ削除確認ダイアログ
     in-out property <bool> show-delete-repo-confirm: false;
@@ -1707,14 +1708,35 @@ export component MainWindow inherits Window {
                                 }
                                 
                                 // テキスト
-                                Text { 
-                                    text: item.is-group ? item.group-name + " (" + item.group-repo-count + ")" : item.repo-path; 
+                                if item.is-group: Text { 
+                                    text: item.group-name + " (" + item.group-repo-count + ")"; 
                                     font-size: 13px; 
-                                    font-weight: item.is-group ? 600 : 400;
-                                    color: item.is-group ? #c9d1d9 : (repo-path == item.repo-path ? white : #c9d1d9); 
+                                    font-weight: 600;
+                                    color: #c9d1d9; 
                                     vertical-alignment: center; 
                                     overflow: elide;
                                     horizontal-stretch: 1;
+                                }
+                                if !item.is-group: HorizontalLayout {
+                                    spacing: 8px;
+                                    horizontal-stretch: 1;
+                                    // リポジトリ名（大きく）
+                                    Text { 
+                                        text: item.repo-name; 
+                                        font-size: 13px; 
+                                        font-weight: 400;
+                                        color: repo-path == item.repo-path ? white : #c9d1d9; 
+                                        vertical-alignment: center; 
+                                    }
+                                    // パス（小さく・薄い色）
+                                    Text { 
+                                        text: item.repo-path; 
+                                        font-size: 10px; 
+                                        color: #888; 
+                                        vertical-alignment: center; 
+                                        overflow: elide;
+                                        horizontal-stretch: 1;
+                                    }
                                 }
                                 
                                 // 削除ボタン

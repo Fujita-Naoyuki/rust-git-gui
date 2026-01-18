@@ -377,6 +377,7 @@ struct RepoListItem {
     group_collapsed: bool,
     group_repo_count: i32,
     repo_path: String,
+    repo_name: String, // リポジトリ名（ディレクトリ名）
     indent_level: i32,
     original_index: i32, // 元のエントリ配列でのインデックス
     index_in_group: i32, // グループ内でのインデックス（グループ内のリポジトリの場合）
@@ -413,6 +414,15 @@ fn save_repo_entries(entries: &[RepoEntry]) {
 fn flatten_repo_entries(entries: &[RepoEntry]) -> Vec<RepoListItem> {
     let mut items = Vec::new();
 
+    // パスからリポジトリ名（ディレクトリ名）を抽出するヘルパー
+    let get_repo_name = |path: &str| -> String {
+        std::path::Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(path)
+            .to_string()
+    };
+
     for (idx, entry) in entries.iter().enumerate() {
         match entry {
             RepoEntry::Group {
@@ -428,6 +438,7 @@ fn flatten_repo_entries(entries: &[RepoEntry]) -> Vec<RepoListItem> {
                     group_collapsed: *collapsed,
                     group_repo_count: repos.len() as i32,
                     repo_path: String::new(),
+                    repo_name: String::new(),
                     indent_level: 0,
                     original_index: idx as i32,
                     index_in_group: -1,
@@ -442,6 +453,7 @@ fn flatten_repo_entries(entries: &[RepoEntry]) -> Vec<RepoListItem> {
                             group_collapsed: false,
                             group_repo_count: 0,
                             repo_path: repo_path.clone(),
+                            repo_name: get_repo_name(repo_path),
                             indent_level: 1,
                             original_index: idx as i32,
                             index_in_group: repo_idx as i32,
@@ -457,6 +469,7 @@ fn flatten_repo_entries(entries: &[RepoEntry]) -> Vec<RepoListItem> {
                     group_collapsed: false,
                     group_repo_count: 0,
                     repo_path: path.clone(),
+                    repo_name: get_repo_name(path),
                     indent_level: 0,
                     original_index: idx as i32,
                     index_in_group: -1,
@@ -701,6 +714,7 @@ fn update_repo_list_ui(ui: &MainWindow, entries: &[RepoEntry]) {
             group_collapsed: item.group_collapsed,
             group_repo_count: item.group_repo_count,
             repo_path: SharedString::from(&item.repo_path),
+            repo_name: SharedString::from(&item.repo_name),
             indent_level: item.indent_level,
             original_index: item.original_index,
             index_in_group: item.index_in_group,
