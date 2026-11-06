@@ -1,6 +1,6 @@
 # RustGitGUI
 
-Slint + Rustで構築されたデスクトップ向けGitクライアントです。VSCode Git Graph風のビジュアルなコミットグラフ表示と直感的なGit操作を提供します。
+[GPUI](https://www.gpui.rs/)（[gpui-kit](https://gpui-kit.com/)）+ Rustで構築されたデスクトップ向けGitクライアントです。VSCode Git Graph風のビジュアルなコミットグラフ表示と直感的なGit操作を提供します。
 
 ## 主な機能
 
@@ -20,7 +20,8 @@ Slint + Rustで構築されたデスクトップ向けGitクライアントで�
 
 ### 必要条件
 
-- Rust 1.70+
+- Rust 1.99.1（`rust-toolchain.toml` で固定。rustup使用時は自動で選択されます）
+- GPU描画が可能な環境（Windows: DirectX 11、Linux: Vulkan）
 - Git
 
 ### ビルド・実行
@@ -80,5 +81,5 @@ git config --global --replace-all credential.helper manager
 
 GNU General Public License v3.0 (GPLv3)
 
-このソフトウェアは [Slint](https://slint.dev/) フレームワークを使用しており、GPLv3ライセンス下で提供されています。
+UIには [GPUI](https://www.gpui.rs/) / [gpui-kit](https://gpui-kit.com/)（Apache-2.0）を使用しています。
 配布や改変を行う場合は、GPLv3の条項（ソースコードの開示義務など）に従ってください。

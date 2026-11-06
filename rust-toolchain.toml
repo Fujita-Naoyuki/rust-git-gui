@@ -1,0 +1,4 @@
+[toolchain]
+# GPUI (gpui-kit) が要求するRustバージョン
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]

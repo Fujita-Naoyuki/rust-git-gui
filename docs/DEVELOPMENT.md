@@ -6,144 +6,114 @@ RustGitGUIの開発に参加するための情報をまとめています。
 
 | 技術 | バージョン | 用途 |
 |------|-----------|------|
-| Slint | 1.14 | UI フレームワーク |
+| gpui-kit | 0.9 | UI フレームワーク（GPUI + gpui-component） |
 | git2 | 0.20 | Git操作（libgit2バインディング） |
 | chrono | 0.4 | 日時処理 |
 | dirs | 6.0 | 設定ファイルパス取得 |
-| rfd | 0.16 | ファイルダイアログ |
-| arboard | 3.6 | クリップボード操作 |
-| open | 5.3 | 外部URLを開く |
+| serde / serde_json | 1.0 | 設定ファイルの読み書き |
+
+ファイルダイアログ・クリップボード・URLを開く処理はGPUI標準の機能（`prompt_for_paths` / `write_to_clipboard` / `open_url`）を使用しています。
+
+Rustのバージョンは `rust-toolchain.toml` で固定しています（GPUIが新しいRustを要求するため）。
 
 ## プロジェクト構成
 
 ```
-git-client/
-├── Cargo.toml          # 依存関係定義
-├── build.rs            # Slintビルドスクリプト
-├── README.md           # 利用者向けドキュメント
+rust-git-gui/
+├── Cargo.toml
+├── rust-toolchain.toml   # Rustバージョン固定
 ├── src/
-│   └── main.rs         # Rustバックエンド（3400行）
-├── ui/
-│   └── main.slint      # Slint UI定義（1680行）
+│   ├── main.rs           # エントリポイント（ウィンドウ作成）
+│   ├── app.rs            # アプリ状態（GitApp）と操作
+│   ├── git.rs            # GitClient・Diff解析・非同期用ヘルパー（UI非依存）
+│   ├── graph.rs          # Git Graphのレーン計算（UI非依存）
+│   ├── config.rs         # 設定ファイル（リポジトリ一覧・コミット履歴）
+│   ├── model.rs          # 画面表示用データ構造
+│   └── views/            # 画面描画
+│       ├── mod.rs        # ルートレイアウト・配色・共通部品
+│       ├── toolbar.rs    # 上部ツールバー
+│       ├── sidebar.rs    # Local/Remote/Stash一覧
+│       ├── graph.rs      # コミットグラフ・変更ファイル一覧
+│       ├── diff.rs       # Diff表示
+│       ├── commit_panel.rs # コミットモード（Stage/Unstage/メッセージ）
+│       ├── repo_list.rs  # リポジトリ一覧（ドラッグ&ドロップ）
+│       └── dialogs.rs    # 入力・確認ダイアログ
 └── docs/
-    ├── DEVELOPMENT.md  # このファイル
-    └── FEATURES.md     # 機能一覧
 ```
 
 ## アーキテクチャ
 
 ```mermaid
 flowchart TB
-    subgraph UI["Slint UI (main.slint)"]
-        MainWindow["MainWindow"]
-        Components["UIコンポーネント群"]
-        Callbacks["コールバック定義"]
+    subgraph UI["views/ (GPUI描画)"]
+        Render["Render for GitApp"]
+        Dialogs["dialogs"]
     end
-    
-    subgraph Backend["Rust Backend (main.rs)"]
-        GitClient["GitClient構造体"]
-        GraphBuilder["GraphBuilder"]
-        ConfigManager["設定管理"]
+
+    subgraph State["app.rs"]
+        GitApp["GitApp (Entity)"]
     end
-    
-    subgraph External["外部"]
-        git2["git2 (libgit2)"]
-        FileSystem["ファイルシステム"]
+
+    subgraph Core["UI非依存"]
+        GitClient["git.rs: GitClient / load_snapshot"]
+        GraphBuilder["graph.rs: GraphBuilder"]
+        Config["config.rs"]
     end
-    
-    MainWindow --> Components
-    Components --> Callbacks
-    Callbacks --> GitClient
-    GitClient --> git2
+
+    Render --> GitApp
+    Dialogs --> GitApp
+    GitApp -->|同期操作| GitClient
+    GitApp -->|background_executor| GitClient
     GitClient --> GraphBuilder
-    ConfigManager --> FileSystem
+    GitApp --> Config
 ```
+
+- 画面状態はすべて `GitApp` が保持し、`views/` は `impl GitApp` の描画メソッドとして実装しています。
+- 状態の再読み込み（`git::load_snapshot`）、コミットDiff計算、Fetch/Pull/Push/Cloneは `background_executor` で別スレッド実行し、完了後に `GitApp` を更新します。
+- Stage/Unstage/コミットなどの軽い操作はUIスレッドで実行し、その後バックグラウンドで再読み込みします。
 
 ## 主要コンポーネント
 
-### GitClient (`src/main.rs`)
-
-git2をラップしたGit操作クラス。主なメソッド：
+### GitClient (`src/git.rs`)
 
 | メソッド | 説明 |
 |---------|------|
 | `open_repo()` | リポジトリを開く |
 | `get_commits_with_graph()` | コミット履歴とグラフデータ取得 |
 | `get_status()` | Staged/Unstagedファイル取得 |
-| `stage_file()` / `unstage_file()` | ファイルのステージング |
+| `stage_file()` / `unstage_file()` / `stage_hunk()` | ステージング |
 | `commit()` | コミット作成 |
 | `push()` / `pull()` | リモート操作 |
-| `checkout_branch()` | ブランチ切り替え |
-| `merge_branch()` | ブランチマージ |
+| `checkout_branch()` / `merge_branch()` | ブランチ操作 |
 | `stash_save()` / `stash_pop()` | Stash操作 |
 
-### GraphBuilder (`src/main.rs`)
+### GraphBuilder (`src/graph.rs`)
 
-VSCode Git Graph風のコミットグラフ描画エンジン。
+VSCode Git Graph風のコミットグラフ計算エンジン。
 
 - コミットの親子関係からブランチ線を計算
 - 色分け（16色パレット）
-- SVGパス生成（Slintの`Path`要素で描画）
-
-### UIコンポーネント (`ui/main.slint`)
-
-| コンポーネント | 説明 |
-|---------------|------|
-| `MainWindow` | メインウィンドウ |
-| `GraphCommitItem` | コミット行（グラフ＋情報） |
-| `FileItem` | ファイル項目（Stage/Unstage用） |
-| `DiffLine` | Diff行 |
-| `LocalBranchItem` / `RemoteBranchItem` | ブランチ項目 |
-| `StashItem` | Stash項目 |
-| `ModalLineEdit` / `ModalButton` | モーダル用入力・ボタン |
+- 行ごとの線分・ベジェ曲線（`GraphRow`）を生成し、`views/graph.rs` の `canvas` で描画
 
 ## ビルド方法
 
 ```bash
-# デバッグビルド
 cargo build
-
-# リリースビルド
 cargo build --release
-
-# 実行
 cargo run
+```
+
+### Linuxでのビルド
+
+GPUIのビルドには追加のシステムライブラリが必要です（例: Ubuntu）。
+
+```bash
+sudo apt install libxkbcommon-x11-dev libxcb1-dev libvulkan-dev libwayland-dev libfontconfig-dev
 ```
 
 ## 設定ファイル
 
-設定は `~/.config/slint-git-client/` に保存されます：
+`dirs::config_dir()/git-client/` に保存されます：
 
-- `recent_repos.json` - 最近使用したリポジトリ一覧
+- `recent_repos.json` - リポジトリ一覧（グループを含む）
 - `commit_history.json` - コミットメッセージ履歴
-
-## コード規約
-
-### Rust (main.rs)
-
-- `GitClient`のメソッドは`Result<(), String>`を返す
-- エラーメッセージは日本語でも英語でもOK
-- コールバックは`main()`関数内で`on_`プレフィックスで登録
-
-### Slint (main.slint)
-
-- `callback` → Rustから呼ばれる
-- `in-out property` → UIとRustで双方向バインディング
-- コンポーネント名はPascalCase
-
-## クリップボード操作の注意点
-
-Linux環境ではクリップボード操作に特殊な対応が必要：
-
-```rust
-#[cfg(target_os = "linux")]
-fn copy_to_clipboard_async(text: String) {
-    std::thread::spawn(move || {
-        if let Ok(mut clipboard) = Clipboard::new() {
-            let _ = clipboard.set().wait().text(text);
-        }
-    });
-}
-```
-
-`.wait()` を使用しないとクリップボードマネージャーにデータが渡る前にスレッドが終了します。
